@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+data:
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  # Non-secret app configuration only — anything sensitive goes through the External Secrets
+  # Operator / cloud secret manager into a Kubernetes Secret, never into this ConfigMap
+  # (see .claude/rules/secrets.md and the external-secrets skill).

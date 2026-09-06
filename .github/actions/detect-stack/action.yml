@@ -1,0 +1,70 @@
+name: "Detect Stack"
+description: >
+  Detects the application language/runtime from repository manifest files when the caller
+  doesn't pin one explicitly via workflow input. Never overrides an explicit input — detection
+  is a convenience fallback only.
+
+inputs:
+  language-override:
+    description: "Language pinned by the caller (python|node|react|java|go). Empty string triggers detection."
+    required: false
+    default: ""
+
+outputs:
+  language:
+    description: "Resolved language: python|node|react|java|go"
+    value: ${{ steps.resolve.outputs.language }}
+  package-manager:
+    description: "Resolved package manager for node/python (npm|yarn|pnpm|pip|poetry), empty otherwise"
+    value: ${{ steps.resolve.outputs.package_manager }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        LANGUAGE="${{ inputs.language-override }}"
+
+        if [ -n "$LANGUAGE" ]; then
+          echo "Language pinned by caller: $LANGUAGE"
+        else
+          echo "No language input given — detecting from repository manifests..."
+          if   [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            LANGUAGE="java"
+          elif [ -f "go.mod" ]; then
+            LANGUAGE="go"
+          elif [ -f "package.json" ] && grep -qE '"(react|react-dom|vite|next)"' package.json 2>/dev/null; then
+            LANGUAGE="react"
+          elif [ -f "package.json" ]; then
+            LANGUAGE="node"
+          elif [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ]; then
+            LANGUAGE="python"
+          else
+            echo "::error::Could not auto-detect language — no recognized manifest found (pom.xml, build.gradle, go.mod, package.json, requirements.txt/pyproject.toml). Pass 'language' input explicitly."
+            exit 1
+          fi
+          echo "Detected language: $LANGUAGE"
+        fi
+
+        PACKAGE_MANAGER=""
+        case "$LANGUAGE" in
+          node|react)
+            if   [ -f "pnpm-lock.yaml" ]; then PACKAGE_MANAGER="pnpm"
+            elif [ -f "yarn.lock" ];      then PACKAGE_MANAGER="yarn"
+            else                               PACKAGE_MANAGER="npm"
+            fi
+            ;;
+          python)
+            if   [ -f "poetry.lock" ]; then PACKAGE_MANAGER="poetry"
+            else                             PACKAGE_MANAGER="pip"
+            fi
+            ;;
+        esac
+
+        {
+          echo "language=$LANGUAGE"
+          echo "package_manager=$PACKAGE_MANAGER"
+        } >> "$GITHUB_OUTPUT"

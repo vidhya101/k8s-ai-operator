@@ -1,0 +1,22 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "aiops-manager-codex",
+  "description": "[codex fallback] AIOps \u2014 anomaly detection over telemetry, alert-noise reduction (grouping/dedup/inhibit), safe auto-remediation.",
+  "character": "kelly",
+  "accent": "lilac",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for aiops-manager. Own AIOps \u2014 anomaly detection over telemetry, alert noise reduction (grouping/dedup/inhibit), safe auto-remediation. No silent silencing.",
+  "capabilities": [
+    "aiops",
+    "anomaly",
+    "correlation",
+    "alert-noise",
+    "auto-remediation",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

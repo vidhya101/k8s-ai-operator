@@ -1,0 +1,102 @@
+# The remediation decision table — machine-readable so the kubernetes-troubleshooter agent (or an
+# Argo Events sensor) can look up "alert X -> is there a Tier-1 action? what is it? what are the
+# guards?" instead of improvising. This is NOT applied to the cluster; it's config the agent reads
+# (mount it as a ConfigMap for the sensor, or the agent reads it from the repo).
+#
+# tier:   0 = Kubernetes does it   1 = autonomous (allowlist)   2 = GitOps auto-PR   3 = page a human
+# Every tier-1 action is: reversible, blast-radius <= one workload or one node, PDB-aware.
+
+apiVersion: platform.io/v1
+kind: RemediationMap
+metadata:
+  name: default
+
+circuitBreakers:
+  perTargetPerHour: 3            # >3 auto-remediations of the same object in 1h -> escalate to tier 3
+  clusterWidePer10Min: 10        # >10 auto-remediations cluster-wide in 10m -> global pause + page
+  requireGreenControlPlane: true # no auto-remediation while KubeAPIServerErrors / EtcdNoLeader firing
+  respectChangeFreeze: true      # honor an Alertmanager silence labelled platform.io/freeze
+  optOutLabel: "remediation.io/policy=manual"
+
+actions:
+
+  - alert: PodCrashLooping
+    tier: 1
+    condition: "restartCount < 20 AND rootCause in [transient-dependency-wait, stale-config]"
+    action: "kubectl -n {{ns}} rollout restart {{ownerKind}}/{{ownerName}}"
+    verify: "all pods Ready within 5m AND restart rate returns to 0"
+    elseTier: 2
+    elseAction: "open PR: fix the missing/renamed ConfigMap|Secret key, or add init wait, or fix command/args"
+
+  - alert: PodOOMKilled
+    tier: 2
+    action: "open PR: set resources.limits.memory = VPA target recommendation (+15% headroom); requests=limits for Guaranteed QoS"
+    tier1Stopgap: "if user-facing AND flapping >3x/10m: kubectl set resources ... then still open the PR"
+    note: "steady memory climb => app leak, not a sizing problem — file a bug, don't just raise the limit forever"
+
+  - alert: PodImagePullBackOff
+    tier: 3
+    action: "page — needs a human decision (rotate pull secret / fix node-role / fix the image ref)"
+    tier1Exception: "kind|minikube local cluster: `kind load docker-image` / `minikube image load`"
+    prevention: "Kyverno images-must-be-safe (enforced) blocks the classes of this that are preventable"
+
+  - alert: PodStuckPending
+    tier: 1
+    condition: "reason == Insufficient{cpu,memory} AND autoscaler present AND not at max nodes"
+    action: "no-op — Cluster Autoscaler / Karpenter adds a node; just verify it does within 10m"
+    elseTier: 2
+    elseAction: "reason == untolerated-taint | affinity-mismatch -> PR to fix toleration/nodeSelector"
+    elseTier3If: "reason == volume-node-affinity-conflict (zone-locked PV) OR autoscaler at max"
+
+  - alert: PodStuckTerminating
+    tier: 1
+    condition: "node Ready AND container process confirmed gone AND stuck > 10m"
+    action: "kubectl -n {{ns}} delete pod {{pod}} --grace-period=0 --force"
+    elseAction: "node NotReady -> route to NodeNotReady instead"
+
+  - alert: DeploymentRolloutStuck
+    tier: 1
+    action: "kubectl -n {{ns}} rollout undo deploy/{{deploy}}"
+    verify: "Progressing=True AND Available=True within 5m"
+    followUp: "always open a tier-2 note so the bad change is fixed forward, not just reverted"
+
+  - alert: NodeNotReady
+    tier: 1
+    action: "owned by NodeHealthCheck/NPD/SelfNodeRemediation — agent does NOT act directly"
+    agentRole: "verify the pipeline progressed (node cordoned within 5m, drained within 15m, replaced); if stuck -> tier 3"
+
+  - alert: NodePressure
+    tier: 1
+    condition: "condition == DiskPressure"
+    action: "run image-gc Job (privileged, platform ns, one-shot) on {{node}}; if still >85% after -> cordon+drain+replace"
+    elseAction: "Memory/PIDPressure -> descheduler LowNodeUtilization handles it; verify within 30m"
+
+  - alert: KubeletCertExpiringSoon
+    tier: 1
+    condition: "distro == kubeadm|k3s (self-managed)"
+    action: "run cert-renewal runbook per node, PDB-aware, one at a time: kubeadm certs renew all + restart kubelet+static pods"
+    elseTier: 3
+    elseAction: "managed cluster should rotate automatically — if this fires, something is wrong, page"
+
+  - alert: CoreDNSErrorsHigh
+    tier: 1
+    action: "verify default-deny NetworkPolicy allows kube-system:53 egress (add allow-dns-egress if missing); then kubectl -n kube-system rollout restart deploy/coredns"
+
+  - alert: PersistentVolumeClaimPending
+    tier: 2
+    action: "no default StorageClass -> PR to set one"
+    elseTier3: "provisioner error or zone conflict"
+
+  - alert: PersistentVolumeFillingUp
+    tier: 2
+    action: "if StorageClass allowVolumeExpansion: PR to grow the PVC. NEVER auto-delete data."
+    elseTier: 3
+
+  - alert: ResourceQuotaNearLimit
+    tier: 2
+    action: "PR: raise ResourceQuota (FinOps sign-off) OR right-size workloads in the namespace"
+
+  - alert: [KubeAPIServerErrors, EtcdNoLeader]
+    tier: 3
+    action: "immediate page, highest priority. Auto-remediation is globally paused while these fire."
+    forbidden: "any automated action against the control plane, ever"

@@ -1,0 +1,135 @@
+name: "Build & Test"
+description: >
+  Installs the correct toolchain, runs dependency install, lint, unit tests (with coverage), and
+  a production build for whichever language the pipeline is targeting. One entry point regardless
+  of stack — the caller doesn't need language-specific jobs.
+
+inputs:
+  language:
+    description: "python|node|react|java|go"
+    required: true
+  package-manager:
+    description: "Package manager from detect-stack (npm|yarn|pnpm|pip|poetry), unused for java/go"
+    required: false
+    default: ""
+  working-directory:
+    description: "Path to the app root if not repo root"
+    required: false
+    default: "."
+  node-version:
+    required: false
+    default: "20"
+  python-version:
+    required: false
+    default: "3.12"
+  java-version:
+    required: false
+    default: "21"
+  go-version:
+    required: false
+    default: "1.22"
+
+runs:
+  using: "composite"
+  steps:
+    # ---------- toolchain setup (one branch actually runs) ----------
+    - if: inputs.language == 'node' || inputs.language == 'react'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: ${{ inputs.package-manager == 'yarn' && 'yarn' || (inputs.package-manager == 'pnpm' && 'pnpm' || 'npm') }}
+        cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+    - if: inputs.language == 'python'
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+        cache: ${{ inputs.package-manager }}
+
+    - if: inputs.language == 'java'
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven
+
+    - if: inputs.language == 'go'
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        cache: true
+
+    # ---------- install / lint / test / build ----------
+    - id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        LANGUAGE="${{ inputs.language }}"
+        PM="${{ inputs.package-manager }}"
+
+        case "$LANGUAGE" in
+          node|react)
+            case "$PM" in
+              pnpm) corepack enable && pnpm install --frozen-lockfile ;;
+              yarn) corepack enable && yarn install --immutable ;;
+              *)    npm ci ;;
+            esac
+            echo "::group::lint"
+            npm run --silent lint --if-present || $PM run lint --if-present || true
+            echo "::endgroup::"
+            echo "::group::test"
+            CI=true npm test --if-present -- --ci --coverage || CI=true $PM run test --if-present
+            echo "::endgroup::"
+            echo "::group::build"
+            npm run --silent build --if-present
+            echo "::endgroup::"
+            ;;
+
+          python)
+            if [ "$PM" = "poetry" ]; then
+              pipx install poetry 2>/dev/null || pip install poetry
+              poetry install --no-interaction --no-ansi
+              RUN="poetry run"
+            else
+              pip install --upgrade pip
+              [ -f requirements.txt ] && pip install -r requirements.txt
+              [ -f requirements-dev.txt ] && pip install -r requirements-dev.txt
+              pip install ruff pytest pytest-cov 2>/dev/null || true
+              RUN=""
+            fi
+            echo "::group::lint"
+            $RUN ruff check . || true
+            echo "::endgroup::"
+            echo "::group::test"
+            $RUN pytest --cov --cov-report=xml --junitxml=junit.xml
+            echo "::endgroup::"
+            ;;
+
+          java)
+            echo "::group::build+test"
+            if [ -f pom.xml ]; then
+              mvn -B -ntp verify
+            else
+              ./gradlew build --no-daemon
+            fi
+            echo "::endgroup::"
+            ;;
+
+          go)
+            echo "::group::lint"
+            go vet ./...
+            echo "::endgroup::"
+            echo "::group::test"
+            go test ./... -race -coverprofile=coverage.out
+            echo "::endgroup::"
+            echo "::group::build"
+            CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/app ./...
+            echo "::endgroup::"
+            ;;
+
+          *)
+            echo "::error::Unsupported language '$LANGUAGE'"
+            exit 1
+            ;;
+        esac

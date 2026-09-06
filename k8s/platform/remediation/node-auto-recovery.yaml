@@ -1,0 +1,94 @@
+# Autonomous node recovery pipeline (Tier 1 — reversible, PDB-aware, bounded).
+#
+#   Node Problem Detector  -> sets a Node Condition when it sees a permanent fault
+#          (kernel deadlock, unregisterable, filesystem RO, container runtime down, frequent kubelet restarts)
+#   Medik8s NodeHealthCheck -> watches those conditions; after a grace period, remediates
+#   Self Node Remediation   -> the remediator: safely reboots or reprovisions the node
+#          (fencing-aware so a partitioned node can't corrupt state)
+#   Cluster Autoscaler/Karpenter -> replaces removed capacity
+#
+# Draino is the simpler (unmaintained-ish) alternative to Medik8s: condition -> cordon -> drain.
+# Prefer Medik8s on managed clusters, Self Node Remediation for bare-metal/kubeadm.
+#
+# Installs:
+#   helm install node-problem-detector deliveryhero/node-problem-detector -n kube-system -f this-values
+#   Medik8s: kubectl apply -f https://github.com/medik8s/node-healthcheck-operator/releases/latest/download/...
+#            (or via OLM / OperatorHub on OpenShift)
+---
+# Extra NPD monitors beyond the defaults — detect the failure modes that most often need a node gone.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-problem-detector-custom-monitors
+  namespace: kube-system
+  labels: { app.kubernetes.io/part-of: platform }
+data:
+  kernel-monitor.json: |
+    {
+      "plugin": "kmsg",
+      "logPath": "/dev/kmsg",
+      "lookback": "5m",
+      "bufferSize": 10,
+      "source": "kernel-monitor",
+      "conditions": [
+        { "type": "KernelDeadlock", "reason": "KernelHasNoDeadlock", "message": "kernel has no deadlock" },
+        { "type": "ReadonlyFilesystem", "reason": "FilesystemIsNotReadOnly", "message": "Filesystem is not read-only" }
+      ],
+      "rules": [
+        { "type": "temporary", "reason": "OOMKilling", "pattern": "Killed process \\d+ (.+) total-vm.*" },
+        { "type": "permanent", "condition": "KernelDeadlock", "reason": "AUFSUmountHung", "pattern": "task .* blocked for more than \\w+ seconds\\." },
+        { "type": "permanent", "condition": "ReadonlyFilesystem", "reason": "FilesystemIsReadOnly", "pattern": "Remounting filesystem read-only" }
+      ]
+    }
+  containerd-monitor.json: |
+    {
+      "plugin": "journald",
+      "pluginConfig": { "source": "containerd" },
+      "logPath": "/var/log/journal",
+      "lookback": "5m",
+      "bufferSize": 10,
+      "source": "containerd-monitor",
+      "conditions": [
+        { "type": "ContainerRuntimeUnhealthy", "reason": "ContainerRuntimeIsHealthy", "message": "container runtime is healthy" }
+      ],
+      "rules": [
+        { "type": "permanent", "condition": "ContainerRuntimeUnhealthy", "reason": "ContainerdDown",
+          "pattern": ".*containerd.*(FATAL|failed to start containerd).*" }
+      ]
+    }
+---
+# Medik8s: remediate a node that has held an unhealthy condition past the grace period.
+apiVersion: remediation.medik8s.io/v1alpha1
+kind: NodeHealthCheck
+metadata:
+  name: platform-node-healthcheck
+spec:
+  # Only worker nodes — NEVER auto-remediate control-plane nodes.
+  selector:
+    matchExpressions:
+      - key: node-role.kubernetes.io/control-plane
+        operator: DoesNotExist
+  # Don't remediate if too much of the fleet is already unhealthy — that's a systemic problem,
+  # not N independent node failures. Circuit breaker.
+  minHealthy: "70%"
+  unhealthyConditions:
+    - type: Ready
+      status: "False"
+      duration: 300s
+    - type: Ready
+      status: Unknown
+      duration: 300s
+    - type: KernelDeadlock
+      status: "True"
+      duration: 120s
+    - type: ContainerRuntimeUnhealthy
+      status: "True"
+      duration: 120s
+    - type: ReadonlyFilesystem
+      status: "True"
+      duration: 60s
+  remediationTemplate:
+    apiVersion: self-node-remediation.medik8s.io/v1alpha1
+    kind: SelfNodeRemediationTemplate
+    name: self-node-remediation-automatic-strategy-template
+    namespace: medik8s

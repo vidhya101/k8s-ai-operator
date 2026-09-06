@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: appworkload-operator-system
+  labels:
+    app.kubernetes.io/part-of: platform
+    pod-security.kubernetes.io/enforce: restricted   # Pod Security Admission — the operator's own Deployment below must satisfy "restricted" too

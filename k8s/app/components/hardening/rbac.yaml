@@ -1,0 +1,52 @@
+# Least-privilege in-namespace RBAC for the app's ServiceAccount (`app`, from
+# k8s/app/base/serviceaccount.yaml).
+#
+# The base app sets `automountServiceAccountToken: false` because it does NOT call the Kubernetes
+# API. If that stays true, you don't strictly need this Role at all — keep it only if the workload
+# genuinely reads cluster state (leader election, watching ConfigMaps, discovering peers).
+#
+# This grants the MINIMUM that a typical "reads its own config + does leader election" workload
+# needs. Delete rules the app doesn't use. Never widen to a ClusterRole unless the app truly needs
+# cross-namespace or cluster-scoped reads — and then scope it with resourceNames where possible.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+rules:
+  # Read (not write) ConfigMaps/Secrets the app mounts — e.g. to hot-reload without a restart.
+  # Drop "secrets" entirely if the app only consumes them via envFrom/volume (the kubelet does
+  # that mount with node creds, the app needs no API access for it).
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+
+  # Coordination API for leader election (client-go's lease-based lock). Remove if single-replica
+  # or if the app has no leader-election path.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Emit Events (startup, config-reload, leader-changed) so `kubectl describe` / `kubectl events`
+  # shows what the app is doing. Purely optional.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: app
+subjects:
+  - kind: ServiceAccount
+    name: app
+    # namespace is filled in by the overlay's `namespace:` / `kustomize edit set namespace`.

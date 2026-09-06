@@ -1,0 +1,176 @@
+name: Reusable CI/CD (any cloud, any language)
+
+# Single reusable workflow behind every pipeline in this org. A caller workflow just fills in
+# `with:` and `secrets:` for its cloud/language/environment — it never duplicates pipeline logic.
+# Stages: detect -> security scan (pre-build) -> build & test -> build/scan/sign/push image ->
+#          deploy to k8s -> smoke-verify. Each stage is a job so failures show per-stage in the
+#          GitHub UI, and later stages don't run if an earlier one fails.
+
+on:
+  workflow_call:
+    inputs:
+      cloud:
+        description: "aws | gcp | azure | local — do not default this; the caller must state it explicitly (CLAUDE.md 1.1: never silently choose a cloud provider)"
+        type: string
+        required: true
+      language:
+        description: "python | node | react | java | go | '' (empty = auto-detect from manifests)"
+        type: string
+        required: false
+        default: ""
+      environment:
+        description: "dev | staging | prod | ... — becomes the GitHub Environment (approval gates) and default namespace"
+        type: string
+        required: true
+      namespace:
+        type: string
+        required: false
+        default: ""
+      app-name:
+        type: string
+        required: true
+      image-name:
+        type: string
+        required: true
+      working-directory:
+        type: string
+        required: false
+        default: "."
+      dockerfile:
+        type: string
+        required: false
+        default: ""
+      deploy:
+        description: "Set false to run build/scan/push only and skip the deploy stage (e.g. library repos, PR builds)"
+        type: boolean
+        required: false
+        default: true
+      fail-on-severity:
+        type: string
+        required: false
+        default: "CRITICAL,HIGH"
+
+      # cloud-specific, only the block matching `cloud` needs to be non-empty
+      aws-region: { type: string, required: false }
+      aws-account-id: { type: string, required: false }
+      aws-role-to-assume: { type: string, required: false }
+      eks-cluster-name: { type: string, required: false }
+
+      gcp-region: { type: string, required: false }
+      gcp-project-id: { type: string, required: false }
+      gcp-workload-identity-provider: { type: string, required: false }
+      gcp-service-account: { type: string, required: false }
+      gke-cluster-name: { type: string, required: false }
+
+      azure-client-id: { type: string, required: false }
+      azure-tenant-id: { type: string, required: false }
+      azure-subscription-id: { type: string, required: false }
+      azure-acr-name: { type: string, required: false }
+      aks-resource-group: { type: string, required: false }
+      aks-cluster-name: { type: string, required: false }
+
+    secrets:
+      KUBECONFIG_CONTENT:
+        description: "Only required when cloud=local and the runner doesn't already have cluster access"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      language: ${{ steps.detect.outputs.language }}
+      package-manager: ${{ steps.detect.outputs.package-manager }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: detect
+        uses: ./.github/actions/detect-stack
+        with:
+          language-override: ${{ inputs.language }}
+
+  security-scan:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/security-scan
+        with:
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          working-directory: ${{ inputs.working-directory }}
+
+  build-test:
+    needs: detect
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/build-test
+        with:
+          language: ${{ needs.detect.outputs.language }}
+          package-manager: ${{ needs.detect.outputs.package-manager }}
+          working-directory: ${{ inputs.working-directory }}
+
+  build-push-image:
+    needs: [detect, security-scan, build-test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # OIDC to cloud + cosign keyless signing
+      packages: write   # GHCR when cloud=local
+    outputs:
+      image-ref: ${{ steps.image.outputs.image-ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: image
+        uses: ./.github/actions/build-push-image
+        with:
+          cloud: ${{ inputs.cloud }}
+          language: ${{ needs.detect.outputs.language }}
+          dockerfile: ${{ inputs.dockerfile }}
+          build-context: ${{ inputs.working-directory }}
+          image-name: ${{ inputs.image-name }}
+          image-tag: ${{ github.sha }}
+          fail-on-severity: ${{ inputs.fail-on-severity }}
+          aws-region: ${{ inputs.aws-region }}
+          aws-account-id: ${{ inputs.aws-account-id }}
+          aws-role-to-assume: ${{ inputs.aws-role-to-assume }}
+          gcp-region: ${{ inputs.gcp-region }}
+          gcp-project-id: ${{ inputs.gcp-project-id }}
+          gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+          gcp-service-account: ${{ inputs.gcp-service-account }}
+          azure-acr-name: ${{ inputs.azure-acr-name }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          azure-subscription-id: ${{ inputs.azure-subscription-id }}
+
+  deploy:
+    if: inputs.deploy
+    needs: build-push-image
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}  # GitHub Environment protection rules gate this job
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/deploy-k8s
+        with:
+          cloud: ${{ inputs.cloud }}
+          namespace: ${{ inputs.namespace != '' && inputs.namespace || inputs.environment }}
+          app-name: ${{ inputs.app-name }}
+          image-ref: ${{ needs.build-push-image.outputs.image-ref }}
+          aws-region: ${{ inputs.aws-region }}
+          aws-role-to-assume: ${{ inputs.aws-role-to-assume }}
+          eks-cluster-name: ${{ inputs.eks-cluster-name }}
+          gcp-region: ${{ inputs.gcp-region }}
+          gcp-project-id: ${{ inputs.gcp-project-id }}
+          gcp-workload-identity-provider: ${{ inputs.gcp-workload-identity-provider }}
+          gcp-service-account: ${{ inputs.gcp-service-account }}
+          gke-cluster-name: ${{ inputs.gke-cluster-name }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          azure-subscription-id: ${{ inputs.azure-subscription-id }}
+          aks-resource-group: ${{ inputs.aks-resource-group }}
+          aks-cluster-name: ${{ inputs.aks-cluster-name }}
+          kubeconfig-content: ${{ secrets.KUBECONFIG_CONTENT }}

@@ -1,0 +1,21 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "github-manager",
+  "description": "GitHub platform \u2014 repos, branch protection, CODEOWNERS, PR workflow, Actions, Dependabot, secret & code scanning.",
+  "character": "andy",
+  "accent": "mint",
+  "provider": "claude",
+  "goal": "Own GitHub \u2014 repos, branch protection, CODEOWNERS, Actions workflows, Dependabot/secret scanning. Left-shift security in the repo.",
+  "capabilities": [
+    "github",
+    "repo",
+    "branch-protection",
+    "codeowners",
+    "actions",
+    "dependabot"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

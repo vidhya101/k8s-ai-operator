@@ -1,0 +1,162 @@
+# The autonomy boundary, expressed as RBAC — not as a promise.
+#
+# You asked for "fix automatically, no permission prompts, but never delete an app or a resource
+# without my permission". The professional way to guarantee that second half is to give the
+# remediation runner a ServiceAccount whose ClusterRole simply DOES NOT CONTAIN the verbs that
+# could destroy anything. Then "it can't delete my Deployment" is a fact the API server enforces
+# on every call, not something a script author has to remember.
+#
+# WHAT THIS SA CAN DO (additive + reversible only):
+#   - get/list/watch everything (read logs, events, metrics, status — diagnose)
+#   - patch/update: Deployments, StatefulSets, DaemonSets scale + resources + annotations +
+#     pod template (bump CPU/RAM, add probes, trigger a rollout, set priorityClassName)
+#   - create: PodDisruptionBudget, HorizontalPodAutoscaler, ResourceQuota, LimitRange,
+#     NetworkPolicy, Event, ConfigMap (add guardrails that were missing)
+#   - delete: PODS ONLY (a pod is owned by a controller and comes straight back — safe + reversible)
+#   - patch Nodes (cordon/uncordon, labels, taints) — NOT delete
+#   - create/patch: rollouts (Argo), VPA, ScaledObject (KEDA)
+#
+# WHAT IT CANNOT DO (no verb granted — API server rejects it):
+#   - delete/deletecollection on Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs,
+#     CronJobs, Services, Ingresses, PersistentVolumeClaims, PersistentVolumes, Namespaces,
+#     Nodes, CRDs, Secrets, ConfigMaps, RBAC objects
+#   - anything in kube-system / the control plane (the RoleBinding excludes it; see note)
+#   - create/patch Secrets or RBAC (no privilege escalation path)
+#   - exec into pods, port-forward, impersonate
+#
+# Deleting an app, a PVC, a namespace, or a node therefore ALWAYS requires a human — exactly as
+# you asked. To let it do one of those in a specific case, you (a human) grant a narrow extra Role
+# in that namespace; you never widen this ClusterRole.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-autopilot
+  namespace: platform-system
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-autopilot
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+rules:
+  # --- READ EVERYTHING (diagnose: logs, events, status, metrics) --------------------------------
+  - apiGroups: ["", "apps", "batch", "autoscaling", "policy", "networking.k8s.io",
+                "storage.k8s.io", "apiextensions.k8s.io", "coordination.k8s.io",
+                "metrics.k8s.io", "monitoring.coreos.com", "argoproj.io",
+                "autoscaling.k8s.io", "keda.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+
+  # --- SELF-HEAL WORKLOADS: patch only, never delete -------------------------------------------
+  # patch covers: scale up, bump resources.requests/limits, add/adjust probes, set
+  # priorityClassName, add the Reloader annotation, and (via a template change) trigger a rollout.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/status", "statefulsets/status"]
+    verbs: ["get"]
+  # rollout restart is a patch to the pod template's annotations — covered above. rollout undo:
+  - apiGroups: ["apps"]
+    resources: ["controllerrevisions"]
+    verbs: ["get", "list", "watch"]
+
+  # --- DELETE PODS ONLY (owned by a controller → recreated immediately, fully reversible) ------
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]                     # PDB-aware drain of a single pod
+
+  # --- CREATE GUARDRAILS THAT WERE MISSING (additive) -----------------------------------------
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["keda.sh"]
+    resources: ["scaledobjects", "scaledjobs"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["rollouts"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["resourcequotas", "limitranges"]
+    verbs: ["get", "list", "watch", "create", "patch"]   # create/raise a quota, never delete
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+
+  # --- NODES: cordon/uncordon/taint/label via patch; NEVER delete -----------------------------
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["get"]
+
+  # --- OBSERVABILITY: emit Events + write its own audit/state ConfigMap ------------------------
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]   # leader election if HA
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-autopilot
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-autopilot
+subjects:
+  - kind: ServiceAccount
+    name: cluster-autopilot
+    namespace: platform-system
+---
+# Belt-and-braces: even though the ClusterRole has no delete verb on workloads, deny the runner's
+# SA entirely in the control-plane namespaces so a future accidental ClusterRole widening still
+# can't reach them. Kyverno enforces this (Kyverno installed per k8s/platform).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: autopilot-stay-out-of-system-namespaces
+  labels: { app.kubernetes.io/part-of: platform }
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    - name: block-autopilot-writes-to-system-ns
+      match:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kube-node-lease", "kube-public", "kube-apiserver",
+                           "kubernetes-dashboard", "cert-manager", "kyverno"]
+      exclude:
+        any:
+          - subjects: [{ kind: User, name: "system:*" }]        # let the real controllers work
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:platform-system:cluster-autopilot"
+      validate:
+        message: "cluster-autopilot may not modify control-plane / system namespaces — a human must."
+        deny: {}

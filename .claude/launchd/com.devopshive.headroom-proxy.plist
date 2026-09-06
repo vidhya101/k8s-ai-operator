@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs headroom's local optimization proxy (compresses tool outputs/logs/JSON
+  before they reach the LLM) at http://127.0.0.1:8787. Munder Difflin's
+  ANTHROPIC_BASE_URL env var (set in com.devopshive.munder-difflin.plist)
+  points every hive agent's Claude Code CLI through this proxy — no separate
+  credentials needed here; Claude Code's own auth headers pass straight
+  through to the real api.anthropic.com.
+
+  Deliberately minimal flags: no --memory, --learn, --code-graph, or --budget
+  — those change behavior beyond "compress in transit," which is all this
+  was scoped for (2026-08-25). Add them later as a separate, explicit change
+  if wanted.
+
+  KeepAlive restarts it if it crashes; RunAtLoad starts it at login, same as
+  the other devopshive agents.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.devopshive.headroom-proxy</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/vidhyashankergoel/.local/bin/headroom</string>
+        <string>proxy</string>
+        <string>--port</string>
+        <string>8787</string>
+        <string>--log-file</string>
+        <string>/Users/vidhyashankergoel/.local/state/devops-hive-headroom-proxy.jsonl</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-headroom-proxy.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-headroom-proxy.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/vidhyashankergoel/.local/bin</string>
+        <key>HOME</key>
+        <string>/Users/vidhyashankergoel/</string>
+    </dict>
+</dict>
+</plist>

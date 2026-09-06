@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "kubernetes-manager",
+  "description": "Kubernetes across all distros (EKS/AKS/GKE/OpenShift/kubeadm/k3s/kind) \u2014 workloads, RBAC, network policy, admission control.",
+  "character": "creed",
+  "accent": "coral",
+  "provider": "claude",
+  "goal": "Own Kubernetes across all distros (EKS/AKS/GKE/OpenShift/kubeadm/k3s/kind). Workload design, RBAC, network policy, admission control.",
+  "capabilities": [
+    "kubernetes",
+    "eks",
+    "aks",
+    "gke",
+    "openshift",
+    "helm",
+    "argo",
+    "kubeadm"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

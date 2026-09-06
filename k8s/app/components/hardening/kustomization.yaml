@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Namespace-level hardening: creates the Namespace with Pod Security Admission "restricted"
+# enforced, and a least-privilege Role/RoleBinding for the app's ServiceAccount.
+#
+# The Namespace name here is a placeholder — each overlay already runs `kustomize edit set
+# namespace <env>` (or the `namespace:` field), which rewrites namespaced objects but NOT the
+# name of a Namespace object. So either:
+#   (a) `kustomize edit set namespace <env>` AND edit namespace.yaml's metadata.name to match, or
+#   (b) drop namespace.yaml from this component and create the namespace out-of-band with the
+#       PSA labels (kubectl label ns <env> pod-security.kubernetes.io/enforce=restricted ...).
+resources:
+  - namespace.yaml
+  - rbac.yaml

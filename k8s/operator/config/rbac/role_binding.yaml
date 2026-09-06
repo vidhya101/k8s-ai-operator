@@ -1,0 +1,25 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: appworkload-operator-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: appworkload-operator-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: appworkload-operator
+    namespace: appworkload-operator-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: appworkload-operator-leader-election-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: appworkload-operator-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: appworkload-operator
+    namespace: appworkload-operator-system

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"exit: $?\")",
+      "Bash(echo \"init exit: $?\")",
+      "Bash(echo \"fmt exit: $?\")",
+      "Bash(echo \"kustomize exit $?\")",
+      "Bash(python3 -c ' *)",
+      "mcp__memory__add_observations"
+    ],
+    "defaultMode": "default"
+  }
+}

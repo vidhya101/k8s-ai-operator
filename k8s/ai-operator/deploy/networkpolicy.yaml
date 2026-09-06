@@ -1,0 +1,38 @@
+# The operator may talk to: DNS, the Kubernetes API server, your Ollama, and your Git host.
+# Nothing else. Default-deny everything, then allow those four.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-operator-default-deny
+  namespace: ai-operator
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-operator-egress
+  namespace: ai-operator
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ai-operator }
+  policyTypes: ["Egress"]
+  egress:
+    # DNS
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+      ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    # Kubernetes API server (default Service in the default namespace); install.sh also adds a
+    # host CIDR rule if the API server is external (managed control plane).
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0 } }]
+      ports: [{ port: 443, protocol: TCP }, { port: 6443, protocol: TCP }]
+    # Ollama on the LAN — install.sh narrows 0.0.0.0/0 to $OLLAMA_IP/32.
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0 } }]
+      ports: [{ port: 11434, protocol: TCP }]
+    # Git over HTTPS/SSH — install.sh narrows to the resolved Git host if possible.
+    - to: [{ ipBlock: { cidr: 0.0.0.0/0 } }]
+      ports: [{ port: 443, protocol: TCP }, { port: 22, protocol: TCP }]
+  # NOTE: the three 0.0.0.0/0 rules are the permissive default so a fresh install works anywhere.
+  # install.sh rewrites them to $OLLAMA_IP/32 and the Git host on a real deployment; do the same
+  # by hand for a hardened cluster.

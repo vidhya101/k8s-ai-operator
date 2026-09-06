@@ -1,0 +1,24 @@
+# Namespace-wide ceiling — caps total consumption regardless of how many workloads land in this
+# namespace, independent of any single Deployment's own requests/limits. Sized for a small
+# service namespace (a handful of Deployments); raise per-environment in an overlay for a
+# namespace that legitimately hosts more.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: namespace-quota
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "50"
+    services: "20"
+    services.loadbalancers: "1"     # LB Services cost real money per-cloud — cap accidental sprawl
+    persistentvolumeclaims: "10"
+    count/deployments.apps: "20"
+    count/jobs.batch: "20"
+    count/secrets: "50"
+    count/configmaps: "50"

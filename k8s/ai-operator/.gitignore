@@ -1,0 +1,8 @@
+# never commit real config / secrets / local build state
+.env
+*.env
+!env.template
+workspace/
+*.bak
+__pycache__/
+*.pyc

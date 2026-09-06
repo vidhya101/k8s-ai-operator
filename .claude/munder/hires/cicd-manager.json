@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "cicd-manager",
+  "description": "CI/CD pipeline design \u2014 gate placement (SAST/SCA/image/IaC scan), promotion, immutable artifacts, deployment strategies.",
+  "character": "oscar",
+  "accent": "mint",
+  "provider": "claude",
+  "goal": "Own CI/CD pipeline design \u2014 gate placement (SAST/SCA/image/IaC scan), promotion, immutable artifacts. No manual deploys.",
+  "capabilities": [
+    "ci",
+    "cd",
+    "pipeline",
+    "release",
+    "artifact",
+    "sast",
+    "sca",
+    "gates"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

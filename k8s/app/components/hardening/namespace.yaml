@@ -1,0 +1,30 @@
+# Namespace with Pod Security Admission (PSA) enforced at the "restricted" level — the modern,
+# built-in replacement for PodSecurityPolicy (removed in 1.25). No controller to install.
+#
+#   enforce  -> pods that violate `restricted` are REJECTED at admission
+#   audit    -> violations are recorded in the audit log (kept == enforce here so nothing is silent)
+#   warn     -> kubectl prints a warning to whoever applied the manifest
+#
+# `restricted` requires exactly what k8s/app/base/deployment.yaml already sets: runAsNonRoot,
+# seccompProfile RuntimeDefault, allowPrivilegeEscalation:false, capabilities.drop:[ALL],
+# no hostPath / hostNetwork / hostPID / hostIPC / privileged. So the base workload passes as-is.
+#
+# `metadata.name` MUST match the overlay's target namespace (see this component's kustomization.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app-namespace-placeholder
+  labels:
+    app.kubernetes.io/part-of: platform
+    # Pin the standard to a specific Kubernetes minor so a cluster upgrade that tightens
+    # `restricted` can't retroactively start rejecting already-running workloads without you
+    # opting in. Bump this deliberately when you upgrade and re-test.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest
+    # NetworkPolicy overlays (aws/azure/gcp/local) select the ingress-controller namespace by
+    # `kubernetes.io/metadata.name` — that label is set automatically by the API server on every
+    # Namespace, so nothing to add here for the app's own namespace.

@@ -1,0 +1,92 @@
+# A Remediation is what the operator is doing (or proposing) about a Finding. It carries the exact
+# change, the backup reference, the validation result, and the outcome — a full audit trail.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: remediations.ai-operator.io
+spec:
+  group: ai-operator.io
+  scope: Namespaced
+  names:
+    kind: Remediation
+    listKind: RemediationList
+    plural: remediations
+    singular: remediation
+    shortNames: ["remed"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Finding,  type: string, jsonPath: .spec.findingRef }
+        - { name: Strategy, type: string, jsonPath: .spec.strategy }
+        - { name: Phase,    type: string, jsonPath: .status.phase }
+        - { name: Backup,   type: string, jsonPath: .status.backupRef }
+        - { name: PR,       type: string, jsonPath: .status.pullRequestURL }
+        - { name: Age,      type: date,   jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["findingRef", "strategy"]
+              properties:
+                findingRef: { type: string }
+                strategy:
+                  type: string
+                  enum:
+                    - patch          # strategic/JSON merge patch to an existing object
+                    - apply          # server-side apply of a full manifest (new or replace-in-place)
+                    - open-port      # create/patch Service + Ingress/Gateway + NetworkPolicy
+                    - helm-upgrade   # helm upgrade an already-installed release
+                    - helm-install   # helm install a chart on the allowedCharts list
+                    - gitops-pr      # commit + PR only, never touch the cluster directly
+                    - backup-and-recreate   # snapshot, then create the new object alongside (no delete)
+                riskClass:
+                  type: string
+                  enum: ["low", "medium", "high"]
+                  description: coordinator's call; 'low' is auto-appliable in assist mode
+                change:
+                  type: object
+                  description: The actual change. Exactly one field is set per strategy.
+                  properties:
+                    patch:        { type: string, description: "YAML/JSON patch body" }
+                    patchType:    { type: string, enum: ["strategic", "merge", "json"] }
+                    manifest:     { type: string, description: "full YAML for apply/backup-and-recreate" }
+                    helm:
+                      type: object
+                      properties:
+                        release:   { type: string }
+                        chart:     { type: string }
+                        version:   { type: string }
+                        namespace: { type: string }
+                        valuesYAML: { type: string }
+                    diffSummary:  { type: string }
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["Planned", "Validating", "Validated", "AwaitingHuman", "Applying",
+                         "Applied", "Verifying", "Verified", "RolledBack", "Failed"]
+                  default: "Planned"
+                backupRef:
+                  type: string
+                  description: "git commit SHA and/or ConfigMap name holding the pre-change state"
+                validation:
+                  type: object
+                  properties:
+                    dryRunOK:        { type: boolean }
+                    policyOK:        { type: boolean }
+                    nonDestructive:  { type: boolean }
+                    messages:        { type: array, items: { type: string } }
+                pullRequestURL:      { type: string }
+                appliedAt:           { type: string, format: date-time }
+                verifiedAt:          { type: string, format: date-time }
+                attempts:            { type: integer }
+                result:              { type: string }
+                lastTransitionTime:  { type: string, format: date-time }

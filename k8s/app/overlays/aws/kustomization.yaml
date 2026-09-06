@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default   # `kustomize edit set namespace` in CI overwrites this per-environment
+
+resources:
+  - ../../base
+
+patches:
+  # IRSA: binds the ServiceAccount to an IAM role via OIDC federation — no static AWS credentials
+  # anywhere in the pod. Replace the role-arn with the real one from
+  # terraform/modules/aws/eks's IRSA output before applying to a real cluster.
+  - target:
+      kind: ServiceAccount
+      name: app
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/CHANGE_ME-app-irsa-role"
+
+  # AWS Load Balancer Controller provisions an ALB for this Ingress class.
+  - target:
+      kind: Ingress
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/ingressClassName
+        value: alb
+      - op: add
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1scheme
+        value: internal
+      - op: add
+        path: /metadata/annotations/alb.ingress.kubernetes.io~1target-type
+        value: ip
+
+  # aws-load-balancer-controller and the AWS VPC CNI live in kube-system on EKS.
+  - target:
+      kind: NetworkPolicy
+      name: app-allow-ingress-from-ingress-controller
+    patch: |-
+      - op: replace
+        path: /spec/ingress/0/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: kube-system
+
+  # Prefer EKS Managed Node Groups' on-demand capacity; tolerate/prefer Karpenter-provisioned
+  # nodes if this cluster uses it instead (safe no-op label match otherwise).
+  - target:
+      kind: Deployment
+      name: app
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          kubernetes.io/os: linux

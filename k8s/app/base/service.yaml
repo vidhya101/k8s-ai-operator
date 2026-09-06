@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  type: ClusterIP     # external exposure goes through Ingress (ingress.yaml), not a LoadBalancer Service
+  selector:
+    app.kubernetes.io/name: app
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

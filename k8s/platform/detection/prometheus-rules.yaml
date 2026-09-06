@@ -1,0 +1,261 @@
+# The alert catalog — one typed alert per Kubernetes failure class, each carrying a `remediation`
+# annotation the kubernetes-troubleshooter agent (or an Argo Events sensor) reads to pick an action,
+# and a `tier` annotation (0/1/2/3) matching k8s/platform/README.md's remediation tier model.
+#
+# Requires: kube-prometheus-stack (Prometheus Operator CRDs + kube-state-metrics + node-exporter).
+# kube-prometheus-stack already ships the upstream "kubernetes-apps" / "kubernetes-resources" /
+# "node-exporter" rules — this file is the REMEDIATION-ORIENTED overlay, not a replacement. Keep
+# both; silence the upstream copy of anything you re-declare here if the duplicate noise bothers you.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: remediation-alert-catalog
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/part-of: platform
+    release: kube-prometheus-stack        # kube-prometheus-stack's ruleSelector matches this label — adjust to yours
+spec:
+  groups:
+    # ---------------------------------------------------------------------------------------------
+    - name: workload.pods
+      rules:
+        - alert: PodCrashLooping
+          expr: |
+            max by (namespace, pod, container) (
+              rate(kube_pod_container_status_restarts_total[5m]) * 60
+            ) >= 1
+            and
+            max by (namespace, pod, container) (kube_pod_container_status_restarts_total) > 5
+          for: 5m
+          labels: { severity: critical, tier: "1" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} crash-looping ({{ $labels.container }})"
+            remediation: >-
+              diagnose: logs --previous + lastState.terminated.reason/exitCode + events.
+              tier1-allowed IF signature is a known-transient dependency wait AND restarts<20:
+              `kubectl -n {{ $labels.namespace }} rollout restart <owner>`.
+              exitCode 137 -> route to PodOOMKilled. Config key missing -> tier2 GitOps PR.
+
+        - alert: PodOOMKilled
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_last_terminated_reason{reason="OOMKilled"}
+            ) == 1
+          for: 1m
+          labels: { severity: warning, tier: "2" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} OOMKilled"
+            remediation: >-
+              tier2: open a GitOps PR raising resources.limits.memory to the VPA recommendation
+              (kubectl describe vpa). tier1 stopgap only if user-facing AND flapping:
+              bump limit via `kubectl set resources` and file the PR. Steady climb = app leak, file a bug.
+
+        - alert: PodImagePullBackOff
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"}
+            ) == 1
+          for: 3m
+          labels: { severity: critical, tier: "3" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} cannot pull image"
+            remediation: >-
+              describe pod for the registry error. 401/403 -> pull secret / node-role / IRSA-WI (tier3).
+              404/manifest-unknown or arch mismatch -> wrong tag/digest, tier2 PR to fix the ref.
+              kind/minikube -> image not loaded (tier1: `kind load` / `minikube image load`).
+              Prevention: Kyverno disallow-latest + allowed-registries (already enforced).
+
+        - alert: PodStuckPending
+          expr: |
+            max by (namespace, pod) (
+              kube_pod_status_phase{phase="Pending"}
+            ) == 1
+          for: 10m
+          labels: { severity: warning, tier: "1" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} Pending > 10m"
+            remediation: >-
+              read the scheduler FailedScheduling event verbatim.
+              Insufficient cpu/mem -> tier1: Cluster Autoscaler/Karpenter should already be adding
+              nodes; if capped, page (tier3). Untolerated taint / affinity mismatch -> tier2 PR.
+              volume node affinity conflict -> tier3 (zone-locked PV).
+
+        - alert: PodStuckTerminating
+          expr: |
+            count by (namespace, pod) (
+              kube_pod_deletion_timestamp
+            ) and on (namespace, pod) (time() - kube_pod_deletion_timestamp > 600)
+          for: 5m
+          labels: { severity: warning, tier: "1" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} stuck Terminating > 10m"
+            remediation: >-
+              tier1-allowed: check for a stuck finalizer or an unresponsive node.
+              If node is NotReady -> route to NodeNotReady. Else after confirming the process is
+              gone: `kubectl delete pod --grace-period=0 --force` (allowlisted for stuck-terminating only).
+
+    # ---------------------------------------------------------------------------------------------
+    - name: workload.controllers
+      rules:
+        - alert: DeploymentRolloutStuck
+          expr: |
+            kube_deployment_status_condition{condition="Progressing", status="false"} == 1
+          for: 15m
+          labels: { severity: critical, tier: "1" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.deployment }} rollout not progressing"
+            remediation: >-
+              tier1-allowed (reversible): `kubectl -n {{ $labels.namespace }} rollout undo
+              deploy/{{ $labels.deployment }}` to restore service, THEN diagnose forward.
+              If Argo Rollouts manages it, its AnalysisRun should have auto-aborted already.
+
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            (kube_deployment_spec_replicas != kube_deployment_status_replicas_available)
+            and changes(kube_deployment_status_replicas_available[10m]) == 0
+          for: 15m
+          labels: { severity: warning, tier: "1" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.deployment }} short of desired replicas"
+            remediation: "route individual pods to PodStuckPending / PodCrashLooping; this is the rollup."
+
+        - alert: StatefulSetReplicasMismatch
+          expr: |
+            (kube_statefulset_status_replicas_ready != kube_statefulset_replicas)
+            and changes(kube_statefulset_status_replicas_ready[15m]) == 0
+          for: 15m
+          labels: { severity: warning, tier: "3" }
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.statefulset }} degraded"
+            remediation: "StatefulSets are stateful — tier3. Check PVC binding, multi-attach after node loss, ordinal ordering."
+
+        - alert: JobFailed
+          expr: kube_job_failed{condition="true"} == 1
+          for: 1m
+          labels: { severity: warning, tier: "2" }
+          annotations:
+            summary: "Job {{ $labels.namespace }}/{{ $labels.job_name }} failed"
+            remediation: "tier2: inspect logs; if idempotent + transient cause, allowlisted to recreate once. Otherwise PR/bug."
+
+        - alert: HPAMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas
+            >= kube_horizontalpodautoscaler_spec_max_replicas
+          for: 15m
+          labels: { severity: warning, tier: "2" }
+          annotations:
+            summary: "HPA {{ $labels.namespace }}/{{ $labels.horizontalpodautoscaler }} at max"
+            remediation: "tier2 PR to raise maxReplicas (check node capacity + quota headroom first) or investigate the load source."
+
+    # ---------------------------------------------------------------------------------------------
+    - name: nodes
+      rules:
+        - alert: NodeNotReady
+          expr: kube_node_status_condition{condition="Ready", status="true"} == 0
+          for: 5m
+          labels: { severity: critical, tier: "1" }
+          annotations:
+            summary: "Node {{ $labels.node }} NotReady > 5m"
+            remediation: >-
+              Node Problem Detector + Draino/Medik8s handle this autonomously: cordon -> PDB-aware
+              drain -> autoscaler replaces. Agent only intervenes if that pipeline is itself stuck
+              (tier3 page). Never manually force-delete node objects.
+
+        - alert: NodePressure
+          expr: |
+            kube_node_status_condition{condition=~"MemoryPressure|DiskPressure|PIDPressure", status="true"} == 1
+          for: 5m
+          labels: { severity: warning, tier: "1" }
+          annotations:
+            summary: "Node {{ $labels.node }} {{ $labels.condition }}"
+            remediation: >-
+              DiskPressure -> tier1 allowlisted: trigger image GC / prune old logs on the node via a
+              privileged one-shot Job from the platform namespace; if disk is genuinely full, cordon
+              + drain + replace. Memory/PID pressure -> descheduler LowNodeUtilization + autoscaler.
+
+        - alert: KubeletCertExpiringSoon
+          expr: |
+            kubelet_certificate_manager_client_expiration_seconds - time() < 7*24*3600
+          for: 1h
+          labels: { severity: critical, tier: "1" }
+          annotations:
+            summary: "Kubelet client cert on {{ $labels.node }} expires < 7d"
+            remediation: >-
+              kubeadm clusters: certs expire at 1yr. tier1 allowlisted: run the cert-renewal
+              runbook (`kubeadm certs renew` + kubelet restart) node-by-node, PDB-aware.
+              Managed clusters rotate automatically — if this fires there, page (tier3).
+
+    # ---------------------------------------------------------------------------------------------
+    - name: storage
+      rules:
+        - alert: PersistentVolumeClaimPending
+          expr: kube_persistentvolumeclaim_status_phase{phase="Pending"} == 1
+          for: 10m
+          labels: { severity: warning, tier: "3" }
+          annotations:
+            summary: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} Pending"
+            remediation: "describe pvc: no default StorageClass (tier2 PR to set one), provisioner error, or zone conflict (tier3)."
+
+        - alert: PersistentVolumeFillingUp
+          expr: |
+            kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes < 0.10
+            and predict_linear(kubelet_volume_stats_available_bytes[6h], 24*3600) < 0
+          for: 10m
+          labels: { severity: critical, tier: "2" }
+          annotations:
+            summary: "PV for {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} < 10% and filling"
+            remediation: "tier2: expand the PVC if the StorageClass allows volume expansion; otherwise page. Do NOT auto-delete data."
+
+    # ---------------------------------------------------------------------------------------------
+    - name: namespace.quota
+      rules:
+        - alert: ResourceQuotaNearLimit
+          expr: |
+            kube_resourcequota{type="used"} / ignoring(type) kube_resourcequota{type="hard"} > 0.90
+          for: 10m
+          labels: { severity: warning, tier: "2" }
+          annotations:
+            summary: "Namespace {{ $labels.namespace }} at {{ $value | humanizePercentage }} of {{ $labels.resource }} quota"
+            remediation: "tier2 PR: raise the ResourceQuota (with FinOps sign-off) or right-size the workloads. New pods are being rejected at 100%."
+
+    # ---------------------------------------------------------------------------------------------
+    - name: controlplane
+      rules:
+        - alert: KubeAPIServerErrors
+          expr: |
+            sum(rate(apiserver_request_total{code=~"5.."}[5m]))
+            / sum(rate(apiserver_request_total[5m])) > 0.05
+          for: 5m
+          labels: { severity: critical, tier: "3" }
+          annotations:
+            summary: "API server 5xx rate > 5%"
+            remediation: "tier3 immediate page. Check apiserver + etcd pods/logs, etcd disk fsync latency, cert validity. Never auto-act on the control plane."
+
+        - alert: EtcdNoLeader
+          expr: etcd_server_has_leader == 0
+          for: 1m
+          labels: { severity: critical, tier: "3" }
+          annotations:
+            summary: "etcd has no leader"
+            remediation: "tier3 highest priority page. Quorum lost. Restore from snapshot only with explicit human direction."
+
+        - alert: CoreDNSErrorsHigh
+          expr: |
+            sum(rate(coredns_dns_responses_total{rcode="SERVFAIL"}[5m]))
+            / sum(rate(coredns_dns_responses_total[5m])) > 0.02
+          for: 5m
+          labels: { severity: critical, tier: "1" }
+          annotations:
+            summary: "CoreDNS SERVFAIL rate > 2%"
+            remediation: >-
+              tier1: check CoreDNS pod health + the default-deny NetworkPolicy allows egress to
+              kube-system:53 (UDP+TCP) — a missing DNS-egress policy after adopting default-deny is
+              the usual cause. Allowlisted: `kubectl -n kube-system rollout restart deploy/coredns`.
+
+        - alert: CertManagerCertNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 15m
+          labels: { severity: warning, tier: "2" }
+          annotations:
+            summary: "Certificate {{ $labels.namespace }}/{{ $labels.name }} not Ready"
+            remediation: "check the CertificateRequest + Order + Challenge chain (usually DNS-01/HTTP-01 solver or rate limit). cert-manager retries automatically; tier2 if it's a config error."

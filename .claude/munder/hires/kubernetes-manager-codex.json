@@ -1,0 +1,25 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "kubernetes-manager-codex",
+  "description": "[codex fallback] Kubernetes across all distros (EKS/AKS/GKE/OpenShift/kubeadm/k3s/kind) \u2014 workloads, RBAC, network policy, admission control.",
+  "character": "creed",
+  "accent": "mint",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for kubernetes-manager. Own Kubernetes across all distros (EKS/AKS/GKE/OpenShift/kubeadm/k3s/kind). Workload design, RBAC, network policy, admission control.",
+  "capabilities": [
+    "kubernetes",
+    "eks",
+    "aks",
+    "gke",
+    "openshift",
+    "helm",
+    "argo",
+    "kubeadm",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

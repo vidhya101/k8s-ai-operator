@@ -1,0 +1,14 @@
+name: Validate .claude skills
+
+on:
+  push:
+    paths: [".claude/**"]
+  pull_request:
+    paths: [".claude/**"]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: .claude/scripts/validate-skills.sh

@@ -1,0 +1,15 @@
+# Agentic memory (SQLite + embeddings) + backups of pre-change manifests. Small but must persist
+# across pod restarts. RWO is fine — the operator is a single replica (leader-elected if scaled).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ai-operator-memory
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: <your default>   # install.sh leaves this to the cluster default; set it if
+  #                                      there is no default StorageClass.

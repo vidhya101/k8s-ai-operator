@@ -1,0 +1,29 @@
+# Per-container/per-pod defaults and bounds — a container created without explicit
+# resources.requests/limits still gets sane values instead of "unbounded" (default) or
+# "unschedulable" (missing request).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: namespace-limits
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 2Gi
+      min:
+        cpu: 10m
+        memory: 32Mi
+    - type: PersistentVolumeClaim
+      max:
+        storage: 50Gi
+      min:
+        storage: 1Gi

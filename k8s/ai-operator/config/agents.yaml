@@ -1,0 +1,85 @@
+# Agent registry. The operator (src/operator.py + src/agents.py) reads this at startup.
+# `model` is a key into the ai-operator-config ConfigMap (so you retune models without a rebuild).
+# `promptFile` is mounted at /app/config/prompts/.
+#
+# Flow:  scanner + security  --create-->  Finding
+#        coordinator          --triage-->  Finding.status, --create--> Remediation
+#        remediator           --fill----->  Remediation.spec.change
+#        kube_safe.safe_apply --apply---->  Remediation.status  (or gitops agent opens a PR)
+#        coordinator          --learn---->  memory + agent-memory-digest
+
+version: 1
+
+agents:
+  - name: coordinator
+    role: >-
+      Triage and route. Deduplicate Findings, assign severity/priority/confidence, choose the
+      remediation strategy and riskClass, decide auto vs. human, and after each outcome distil a
+      one-paragraph learning into memory. You never write to the cluster directly.
+    model: model.coordinator
+    promptFile: coordinator.md
+    consumes: [Finding]
+    produces: [Remediation]
+    temperature: 0.1
+
+  - name: scanner
+    role: >-
+      Read every Kubernetes manifest (repo files + live objects) and report misconfigurations,
+      missing guardrails (probes, limits, PDB, quota, NetworkPolicy), :latest / unpinned images,
+      privilege, anti-patterns, and efficiency waste. One Finding per distinct issue. Be precise
+      about the target and the exact field.
+    model: model.scanner
+    promptFile: scanner.md
+    produces: [Finding]
+    scan:
+      git: true
+      cluster: true
+      kinds: [Deployment, StatefulSet, DaemonSet, CronJob, Job, Service, Ingress, ConfigMap,
+              HorizontalPodAutoscaler, PodDisruptionBudget, NetworkPolicy, ResourceQuota, LimitRange]
+    temperature: 0.1
+
+  - name: security
+    role: >-
+      Hunt for leaked secrets/tokens/keys/passwords in manifests, ConfigMaps and env; over-broad
+      RBAC; host mounts / hostNetwork / privileged; ports exposed without a NetworkPolicy; images
+      from unknown registries. Treat anything that looks like a credential as leaked. Never print
+      the secret value in the Finding — reference its location and redact.
+    model: model.security
+    modelFallback: model.securityFallback
+    promptFile: security.md
+    produces: [Finding]
+    scan:
+      git: true
+      cluster: true
+      kinds: [Deployment, StatefulSet, DaemonSet, CronJob, Job, ConfigMap, Secret, ServiceAccount,
+              Role, ClusterRole, RoleBinding, ClusterRoleBinding, Service, Ingress, NetworkPolicy]
+    temperature: 0.0
+
+  - name: remediator
+    role: >-
+      Given one Finding, produce the SMALLEST change that fixes it: a strategic-merge patch, a full
+      manifest for server-side apply, Helm values, or an open-port bundle. Output must be valid
+      YAML, must not remove any field that holds data, and must pass a server dry-run. If the fix
+      needs a delete, or touches RBAC/Secrets/namespaces/CRDs/PVCs, mark it gitops-pr (human).
+    model: model.remediator
+    promptFile: remediator.md
+    consumes: [Remediation]
+    temperature: 0.0
+
+  - name: gitops
+    role: >-
+      Commit an approved change to a new branch off the base, write a clear PR description
+      (the Finding, the evidence, the diff, the backup ref, the rollback), and open the PR. If a
+      GitOps repo is configured for Argo/Flux, push there instead. Never force-push, never touch
+      the base branch directly.
+    model: model.gitops
+    promptFile: gitops.md
+    consumes: [Remediation]
+    temperature: 0.1
+
+# Global knobs (overridable in ai-operator-config)
+defaults:
+  maxTokens: 2048
+  numCtx: 8192
+  retries: 3
+  backoffSeconds: 5

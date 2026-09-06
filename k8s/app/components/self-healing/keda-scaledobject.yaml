@@ -1,0 +1,46 @@
+# REFERENCE — event-driven autoscaling with KEDA. Not wired into the component's kustomization
+# because it REPLACES the base's CPU/memory HPA (KEDA creates and owns its own HPA object; two
+# HPAs on one Deployment fight). Use this when load is NOT CPU-correlated — a queue consumer, a
+# webhook burst, a nightly batch.
+#
+# To adopt: remove `hpa.yaml` from the overlay (or the base kustomization for that env) and add
+# this file to the overlay's `resources:`. Requires KEDA installed (see this component's
+# kustomization.yaml for the helm command).
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  scaleTargetRef:
+    name: app
+  minReplicaCount: 1        # set 0 for true scale-to-zero (cold-start tradeoff — keep startupProbe generous)
+  maxReplicaCount: 20
+  cooldownPeriod: 300
+  pollingInterval: 15
+  fallback:                 # if the metric source is unreachable, hold a safe replica count
+    failureThreshold: 3
+    replicas: 3
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:             # mirrors the base HPA's tuned behavior — fast up, cautious down
+        scaleDown:
+          stabilizationWindowSeconds: 300
+        scaleUp:
+          stabilizationWindowSeconds: 0
+  triggers:
+    # Pick the trigger(s) that match the workload. Examples — delete the ones you don't use.
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring.svc:9090
+        query: sum(rate(http_requests_in_flight{app="app"}[1m]))
+        threshold: "100"
+    # - type: aws-sqs-queue
+    #   authenticationRef: { name: keda-aws-creds }
+    #   metadata: { queueURL: "...", queueLength: "50", awsRegion: "us-east-1" }
+    # - type: kafka
+    #   metadata: { bootstrapServers: "...", consumerGroup: "app", topic: "events", lagThreshold: "100" }
+    # - type: cron
+    #   metadata: { timezone: "UTC", start: "0 8 * * *", end: "0 20 * * *", desiredReplicas: "5" }

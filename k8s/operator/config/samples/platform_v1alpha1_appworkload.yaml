@@ -1,0 +1,24 @@
+# kubectl apply -f this file (after installing the operator via `kubectl apply -k config/default`)
+# and the operator creates a Deployment/Service/ServiceAccount/HPA/PDB for you — the same shape
+# k8s/app/base/*.yaml hand-writes, generated instead from one declarative object.
+apiVersion: platform.io/v1alpha1
+kind: AppWorkload
+metadata:
+  name: hello-service
+  namespace: default
+spec:
+  image: ghcr.io/example-org/hello-service@sha256:REPLACE_WITH_REAL_DIGEST
+  port: 8080
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  env:
+    - name: LOG_LEVEL
+      value: info
+  # Example for an EKS cluster — swap for the GCP/Azure annotation, or omit entirely for `local`.
+  serviceAccountAnnotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID:role/CHANGE_ME-hello-service-irsa-role"
+  cloud: aws

@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# `kubectl apply -k config/default` installs the whole operator: CRD + namespace + RBAC + the
+# manager Deployment itself. This is the operator's own install path — independent of, and a
+# layer below, any individual AppWorkload CR a team later applies once the operator is running.
+resources:
+  - ../crd
+  - ../rbac
+  - ../manager

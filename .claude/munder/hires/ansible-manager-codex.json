@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "ansible-manager-codex",
+  "description": "[codex fallback] Ansible config management \u2014 playbooks, roles, idempotency, static + dynamic inventory, Ansible Vault, molecule tests.",
+  "character": "phyllis",
+  "accent": "peach",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for ansible-manager. Own Ansible \u2014 playbooks, roles, idempotency, Vault, inventory (static + dynamic). Every play converges cleanly on re-run.",
+  "capabilities": [
+    "ansible",
+    "playbook",
+    "role",
+    "vault",
+    "idempotency",
+    "inventory",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

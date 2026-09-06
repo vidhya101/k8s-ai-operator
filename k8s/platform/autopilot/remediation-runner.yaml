@@ -1,0 +1,254 @@
+# The autonomous long-tail remediator. Runs in-cluster on a schedule as the `cluster-autopilot`
+# ServiceAccount (rbac.yaml) — no human in the loop, because the SA's RBAC physically cannot do
+# anything destructive. It only does ADDITIVE + POD-LEVEL + REVERSIBLE actions, all circuit-broken.
+#
+# ~80% of real incidents are already handled autonomously by the operators in k8s/platform
+# (NodeHealthCheck/NPD, Descheduler, Cluster Autoscaler, KEDA, Argo Rollouts auto-rollback,
+# cert-manager, Reloader) + VPA Auto (rightsize.yaml). This CronJob is the small remainder:
+# transient crash-loops and stuck-Terminating pods, plus emitting an actionable Event for
+# everything it is deliberately NOT allowed to fix by itself (so a human sees it immediately).
+#
+# Prereqs: platform-system namespace, rbac.yaml applied, kubectl image reachable.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: platform-system
+  labels:
+    app.kubernetes.io/part-of: platform
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# Runtime switches. Edit live (`kubectl -n platform-system edit cm autopilot-config`) — the next
+# run picks them up. This is also the kill switch: set paused="true" and all autonomy stops.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autopilot-config
+  namespace: platform-system
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+data:
+  paused: "false"                     # master kill switch
+  dryRun: "false"                     # true => log intended actions, change nothing
+  # circuit breakers
+  maxActionsPerTargetPerHour: "3"     # >this on one object in 1h => stop touching it, escalate
+  maxActionsClusterWidePer10Min: "8"  # >this cluster-wide in 10m => auto-set paused=true + Event
+  # crash-loop remediation window
+  crashLoopMinRestarts: "3"
+  crashLoopMaxRestarts: "25"          # above this it's not transient — escalate, don't restart
+  restartCooldownMinutes: "30"        # don't rollout-restart the same owner twice inside this
+  # stuck-terminating
+  terminatingGraceMinutes: "15"
+  # namespaces the autopilot will NEVER touch (in addition to the RBAC/Kyverno block on system ns)
+  excludeNamespaces: "kube-system,kube-node-lease,kube-public,cert-manager,kyverno,platform-system"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autopilot-script
+  namespace: platform-system
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+data:
+  run.sh: |
+    #!/usr/bin/env bash
+    # Autonomous remediation pass. Additive + pod-level + reversible only. Idempotent.
+    set -Eeuo pipefail
+    C() { kubectl -n platform-system get cm autopilot-config -o "jsonpath={.data.$1}"; }
+    PAUSED=$(C paused); DRY=$(C dryRun)
+    EXCL=",$(C excludeNamespaces),"
+    MAXT=$(C maxActionsPerTargetPerHour); MAXC=$(C maxActionsClusterWidePer10Min)
+    MINR=$(C crashLoopMinRestarts); MAXR=$(C crashLoopMaxRestarts)
+    COOL=$(C restartCooldownMinutes); TGRACE=$(C terminatingGraceMinutes)
+    NOW=$(date -u +%s)
+    log()  { printf '{"ts":"%s","lvl":"%s","msg":%s}\n' "$(date -u +%FT%TZ)" "$1" "$(printf '%s' "$2" | jq -Rsa .)"; }
+    event(){ # $1 ns  $2 involvedObject(kind/name)  $3 reason  $4 message  $5 type(Normal|Warning)
+      kubectl -n "$1" create -f - >/dev/null 2>&1 <<EOF || true
+    apiVersion: v1
+    kind: Event
+    metadata: { generateName: autopilot- , namespace: $1 }
+    involvedObject: { namespace: $1, kind: ${2%%/*}, name: ${2##*/} }
+    reason: $3
+    message: "$4"
+    type: ${5:-Normal}
+    source: { component: cluster-autopilot }
+    firstTimestamp: "$(date -u +%FT%TZ)"
+    lastTimestamp: "$(date -u +%FT%TZ)"
+    EOF
+    }
+    act(){ # wrapper: honors dryRun
+      if [ "$DRY" = "true" ]; then log info "DRYRUN: $*"; return 0; fi
+      "$@"
+    }
+
+    [ "$PAUSED" = "true" ] && { log info "paused=true, doing nothing"; exit 0; }
+
+    # --- guard: don't act while the control plane is unhealthy -------------------------------------
+    if ! kubectl get --raw='/readyz' >/dev/null 2>&1; then
+      log warn "control plane /readyz failing — standing down this pass"; exit 0
+    fi
+
+    # --- circuit breaker: cluster-wide action storm -----------------------------------------------
+    RECENT=$(kubectl get events -A --field-selector reason=AutopilotAction -o json 2>/dev/null \
+      | jq --argjson now "$NOW" '[.items[] | select(((.lastTimestamp // .eventTime // "1970-01-01T00:00:00Z") | try fromdateiso8601 catch 0) > ($now-600))] | length' 2>/dev/null || echo 0)
+    case "$RECENT" in ''|*[!0-9]*) RECENT=0;; esac
+    if [ "$RECENT" -gt "$MAXC" ]; then
+      log warn "cluster-wide breaker tripped ($RECENT actions/10m > $MAXC) — setting paused=true"
+      act kubectl -n platform-system patch cm autopilot-config --type merge -p '{"data":{"paused":"true"}}'
+      event platform-system ConfigMap/autopilot-config AutopilotPaused \
+        "Cluster-wide remediation storm ($RECENT in 10m). Autonomy paused. A human should investigate the systemic cause." Warning
+      exit 0
+    fi
+
+    target_ok(){ # $1 ns  $2 kind/name — per-target hourly breaker via an annotation on the object
+      local ns="$1" ref="$2" k="${2%%/*}" n="${2##*/}" cnt ann
+      ann=$(kubectl -n "$ns" get "$k" "$n" -o jsonpath='{.metadata.annotations.autopilot\.platform\.io/actions-1h}' 2>/dev/null || echo "")
+      cnt=$(printf '%s' "$ann" | jq -r --argjson now "$NOW" '[.[]? | select(. > ($now-3600))] | length' 2>/dev/null || echo 0)
+      if [ "${cnt:-0}" -ge "$MAXT" ]; then
+        event "$ns" "$ref" AutopilotEscalate "Autopilot has acted $cnt times in 1h without resolving this — escalating to a human, will not retry." Warning
+        return 1
+      fi
+      return 0
+    }
+    mark(){ # record an action timestamp on the target + emit the tracked Event
+      local ns="$1" ref="$2" k="${2%%/*}" n="${2##*/}" reason="$3" msg="$4" cur new
+      cur=$(kubectl -n "$ns" get "$k" "$n" -o jsonpath='{.metadata.annotations.autopilot\.platform\.io/actions-1h}' 2>/dev/null || echo "[]")
+      [ -n "$cur" ] || cur="[]"
+      new=$(printf '%s' "$cur" | jq -c --argjson now "$NOW" '(. + [$now]) | map(select(. > ($now-86400)))')
+      act kubectl -n "$ns" annotate "$k" "$n" "autopilot.platform.io/actions-1h=$new" --overwrite >/dev/null
+      event "$ns" "$ref" AutopilotAction "$reason: $msg" Normal
+      log info "$reason $ns/$ref :: $msg"
+    }
+
+    excluded(){ case "$EXCL" in *",$1,"*) return 0;; *) return 1;; esac; }
+
+    # =============================================================================================
+    # 1. Transient CrashLoopBackOff  ->  rollout restart the owning controller
+    # =============================================================================================
+    kubectl get pods -A -o json | jq -c '
+      .items[] | select(any(.status.containerStatuses[]?;
+        .state.waiting.reason=="CrashLoopBackOff")) |
+      (.metadata.ownerReferences // [] | map(select(.kind=="ReplicaSet" or .kind=="StatefulSet")) | .[0] // {}) as $o |
+      { ns:.metadata.namespace, pod:.metadata.name,
+        okind:($o.kind // ""), oname:($o.name // ""),
+        restarts:(([.status.containerStatuses[]?.restartCount] | max) // 0),
+        oom:(any(.status.containerStatuses[]?; .lastState.terminated.reason=="OOMKilled")) }' \
+    | while read -r row; do
+        [ -n "$row" ] || continue
+        NS=$(jq -r .ns <<<"$row"); [ -n "$NS" ] && [ "$NS" != "null" ] || continue
+        excluded "$NS" && continue
+        R=$(jq -r '.restarts // 0' <<<"$row"); OOM=$(jq -r .oom <<<"$row")
+        case "$R" in ''|*[!0-9]*) R=0;; esac
+        OKIND=$(jq -r '.okind // ""' <<<"$row"); ONAME=$(jq -r '.oname // ""' <<<"$row")
+        # ReplicaSet -> its Deployment
+        if [ "$OKIND" = "ReplicaSet" ]; then
+          ONAME=$(kubectl -n "$NS" get rs "$ONAME" -o jsonpath='{.metadata.ownerReferences[0].name}' 2>/dev/null || echo "")
+          OKIND="Deployment"
+        fi
+        [ -n "$ONAME" ] || continue
+        REF="$OKIND/$ONAME"
+        if [ "$OOM" = "true" ]; then
+          event "$NS" "$REF" AutopilotObserve "Pod OOMKilled + crash-looping. Autopilot does not raise memory by itself — add label autopilot.platform.io/rightsize=true to let VPA size it, or a human sets the limit." Warning
+          continue
+        fi
+        if [ "$R" -lt "$MINR" ] || [ "$R" -gt "$MAXR" ]; then
+          [ "$R" -gt "$MAXR" ] && event "$NS" "$REF" AutopilotEscalate "CrashLoopBackOff with $R restarts — past the transient threshold ($MAXR). Not a restart-fixable problem; escalating." Warning
+          continue
+        fi
+        target_ok "$NS" "$REF" || continue
+        # cooldown: skip if we restarted this owner recently
+        LAST=$(kubectl -n "$NS" get "$OKIND" "$ONAME" -o jsonpath='{.metadata.annotations.autopilot\.platform\.io/last-restart}' 2>/dev/null || echo 0)
+        if [ -n "$LAST" ] && [ "$LAST" != "0" ] && [ $(( (NOW-LAST)/60 )) -lt "$COOL" ]; then continue; fi
+        act kubectl -n "$NS" rollout restart "$OKIND/$ONAME" >/dev/null
+        act kubectl -n "$NS" annotate "$OKIND" "$ONAME" "autopilot.platform.io/last-restart=$NOW" --overwrite >/dev/null
+        mark "$NS" "$REF" AutopilotAction "rollout restart (transient CrashLoopBackOff, $R restarts)"
+      done
+
+    # =============================================================================================
+    # 2. Pods stuck Terminating past the grace window, on a Ready node  ->  force-delete the POD
+    # =============================================================================================
+    kubectl get pods -A -o json | jq -c --argjson now "$NOW" --argjson g "$((TGRACE*60))" '
+      .items[] | select(.metadata.deletionTimestamp != null) |
+      select((($now) - (.metadata.deletionTimestamp | fromdateiso8601)) > $g) |
+      { ns:.metadata.namespace, pod:.metadata.name, node:(.spec.nodeName // "") }' \
+    | while read -r row; do
+        NS=$(jq -r .ns <<<"$row"); POD=$(jq -r .pod <<<"$row"); NODE=$(jq -r .node <<<"$row")
+        excluded "$NS" && continue
+        if [ -n "$NODE" ]; then
+          READY=$(kubectl get node "$NODE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+          [ "$READY" = "True" ] || { event "$NS" "Pod/$POD" AutopilotObserve "Pod stuck Terminating but its node $NODE is not Ready — node recovery owns this, not autopilot." Warning; continue; }
+        fi
+        target_ok "$NS" "Pod/$POD" || continue
+        act kubectl -n "$NS" delete pod "$POD" --grace-period=0 --force >/dev/null 2>&1 || true
+        mark "$NS" "Pod/$POD" AutopilotAction "force-deleted pod stuck Terminating > ${TGRACE}m (node Ready)"
+      done
+
+    # =============================================================================================
+    # 3. Everything else it may NOT auto-fix  ->  emit a Warning Event so a human sees it now
+    # =============================================================================================
+    kubectl get pods -A -o json | jq -c --argjson now "$NOW" '
+      .items[] | select(.status.phase=="Pending") |
+      select(any(.status.conditions[]?; .type=="PodScheduled" and .status=="False")) |
+      select(($now - (.metadata.creationTimestamp | fromdateiso8601)) > 900) |
+      { ns:.metadata.namespace, pod:.metadata.name,
+        why:([.status.conditions[]? | select(.type=="PodScheduled")][0].message // "unschedulable") }' \
+    | while read -r row; do
+        NS=$(jq -r .ns <<<"$row"); [ -n "$NS" ] || continue
+        excluded "$NS" && continue
+        POD=$(jq -r .pod <<<"$row"); WHY=$(jq -r .why <<<"$row")
+        event "$NS" "Pod/$POD" AutopilotEscalate "Pending > 15m: $WHY — Cluster Autoscaler/Karpenter should add capacity; if none or capped, a human must act." Warning
+      done
+
+    log info "pass complete"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cluster-autopilot
+  namespace: platform-system
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+spec:
+  schedule: "*/5 * * * *"          # every 5 minutes; the operators handle the sub-minute stuff
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 120
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 240
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: { app.kubernetes.io/component: autopilot }
+        spec:
+          serviceAccountName: cluster-autopilot
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534            # nobody
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: autopilot
+              # Needs kubectl + jq + bash. alpine/k8s bundles all three. Mirror + digest-pin this
+              # into your own registry (the Kyverno images-must-be-safe policy will require it).
+              # kubectl minor should be within +/-1 of the cluster's API server.
+              image: alpine/k8s:1.31.1
+              command: ["bash", "/script/run.sh"]
+              env:
+                - { name: HOME, value: /tmp }          # kubectl cache/config dir, must be writable
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              resources:
+                requests: { cpu: 50m, memory: 96Mi }
+                limits: { cpu: 250m, memory: 256Mi }
+              volumeMounts:
+                - { name: script, mountPath: /script }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: script
+              configMap: { name: autopilot-script, defaultMode: 0555 }
+            - name: tmp
+              emptyDir: {}

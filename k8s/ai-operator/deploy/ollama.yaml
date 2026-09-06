@@ -1,0 +1,64 @@
+# How the in-cluster operator reaches your local Ollama. Two options — install.sh picks one based
+# on `.env` / detected environment; you can also edit this directly.
+#
+# OPTION A (default): Ollama runs on your VM/laptop OUTSIDE the cluster. We create a headless
+# Service + manual Endpoints so the operator can use a stable DNS name (ollama.ai-operator.svc)
+# instead of a hard-coded IP. Set OLLAMA_IP / OLLAMA_PORT in .env; install.sh substitutes them.
+#
+#   ┌── your box: `ollama serve` on 0.0.0.0:11434 (OLLAMA_HOST=0.0.0.0 in its env), LAN-reachable
+#   └── cluster nodes must be able to route to that IP (same LAN, or a VPN, or kind with
+#       `--network host` / the docker bridge gateway 172.17.0.1 / host.docker.internal)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator, app.kubernetes.io/component: ollama-proxy }
+spec:
+  clusterIP: None            # headless — the Endpoints below define the real target
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: ollama                # must match the Service name
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+subsets:
+  - addresses:
+      - ip: "OLLAMA_IP_PLACEHOLDER"     # install.sh replaces with $OLLAMA_IP from .env
+    ports:
+      - name: http
+        port: 11434
+        protocol: TCP
+---
+# OPTION B: run Ollama IN the cluster (uncomment; needs a node with enough RAM — mixtral wants
+# ~32Gi, the 7-8B models ~8Gi; add `nvidia.com/gpu` if you have a GPU node). install.sh enables
+# this when .env has OLLAMA_IN_CLUSTER=true, and skips the Endpoints above.
+#
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata: { name: ollama, namespace: ai-operator }
+# spec:
+#   replicas: 1
+#   selector: { matchLabels: { app: ollama } }
+#   template:
+#     metadata: { labels: { app: ollama } }
+#     spec:
+#       securityContext: { runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+#       containers:
+#         - name: ollama
+#           image: ollama/ollama:0.3.14
+#           ports: [{ containerPort: 11434 }]
+#           env: [{ name: OLLAMA_HOST, value: "0.0.0.0:11434" }, { name: OLLAMA_KEEP_ALIVE, value: "30m" }]
+#           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+#           resources: { requests: { cpu: "2", memory: 8Gi }, limits: { memory: 40Gi } }
+#           volumeMounts: [{ name: models, mountPath: /root/.ollama }, { name: tmp, mountPath: /tmp }]
+#       volumes:
+#         - { name: models, persistentVolumeClaim: { claimName: ollama-models } }
+#         - { name: tmp, emptyDir: {} }

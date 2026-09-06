@@ -1,0 +1,24 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "docker-manager-codex",
+  "description": "[codex fallback] Container images \u2014 multi-stage builds, hardening (non-root, cap drop), Trivy/Grype scans, SBOM, cosign. Distroless-first.",
+  "character": "kevin",
+  "accent": "lemon",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for docker-manager. Own container images \u2014 multi-stage builds, hardening (non-root, capability drop), Trivy/Grype scans, SBOM. Distroless-first.",
+  "capabilities": [
+    "docker",
+    "container",
+    "image",
+    "dockerfile",
+    "distroless",
+    "cve",
+    "sbom",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

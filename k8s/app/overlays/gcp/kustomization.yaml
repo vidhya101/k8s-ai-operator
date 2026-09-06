@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default   # `kustomize edit set namespace` in CI overwrites this per-environment
+
+resources:
+  - ../../base
+
+patches:
+  # GKE Workload Identity: binds this KSA to a GCP service account via IAM, no downloaded
+  # service-account-key JSON anywhere. Replace with the real GSA from terraform/modules/gcp/gke.
+  - target:
+      kind: ServiceAccount
+      name: app
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          iam.gke.io/gcp-service-account: "CHANGE_ME-app@PROJECT_ID.iam.gserviceaccount.com"
+
+  # GKE's native Ingress controller (or Gateway API if the cluster uses that instead — swap
+  # ingressClassName to `gke-l7-gxlb`/`gke-l7-rilb` as appropriate for internal vs external).
+  - target:
+      kind: Ingress
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/ingressClassName
+        value: gce
+
+  # GKE's built-in ingress/load-balancing controller runs as part of the control plane, fronted
+  # by components in kube-system.
+  - target:
+      kind: NetworkPolicy
+      name: app-allow-ingress-from-ingress-controller
+    patch: |-
+      - op: replace
+        path: /spec/ingress/0/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: kube-system
+
+  - target:
+      kind: Deployment
+      name: app
+    patch: |-
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          kubernetes.io/os: linux

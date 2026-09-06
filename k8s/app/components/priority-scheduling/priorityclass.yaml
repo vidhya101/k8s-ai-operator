@@ -1,0 +1,27 @@
+# PriorityClass — when a node is under resource pressure the scheduler preempts (evicts) lower
+# priority pods to make room for higher priority ones, instead of leaving the important workload
+# Pending. Also drives eviction order under node MemoryPressure.
+#
+# Guidance on the number line (higher = more important):
+#   2_000_000_000  system-node-critical  (built-in) — never use for app workloads
+#   1_000_000_000  system-cluster-critical (built-in)
+#     100_000      platform-critical    — ingress, cert-manager, coredns add-ons you self-host
+#      10_000      production-high       <- THIS: user-facing revenue-path services
+#       1_000      production-default    — normal backend services
+#           0      (cluster default)    — batch / dev / best-effort
+#
+# `globalDefault: false` — never make an app PriorityClass the global default; that silently
+# raises the priority of everything without one. Set exactly one low-value class as global default
+# if you want a floor, or leave the built-in 0.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: production-high
+  labels:
+    app.kubernetes.io/part-of: platform
+value: 10000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority   # set to "Never" for a class that should wait rather than evict others
+description: >-
+  User-facing production services on the revenue path. Preempts best-effort and
+  production-default workloads under node pressure.

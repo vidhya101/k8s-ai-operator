@@ -1,0 +1,36 @@
+# Added by code-review-graph
+.code-review-graph/
+
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.auto.tfvars
+crash.log
+crash.*.log
+
+# Go
+k8s/operator/bin/
+k8s/operator/coverage.out
+
+# misc build artifacts
+*.sbom.json
+sbom.spdx.json
+
+# local settings + editor backups
+settings.local.json.bak
+*.bak
+
+# environment / credential files (templates are kept)
+.env
+**/.env
+**/*.env
+!**/env.template
+!**/*.env.template
+
+# python / operator local build
+__pycache__/
+*.pyc
+k8s/ai-operator/workspace/

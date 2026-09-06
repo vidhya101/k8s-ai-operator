@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Vertical Pod Autoscaler — right-sizes CPU/memory requests from OBSERVED usage.
+#
+# PREREQUISITE: the VPA components must be installed in the cluster, or `kubectl apply` of the
+# built manifest fails with "no matches for kind VerticalPodAutoscaler". Install:
+#   git clone https://github.com/kubernetes/autoscaler
+#   ./autoscaler/vertical-pod-autoscaler/hack/vpa-up.sh
+# or via the fairwinds/vpa Helm chart. On GKE it's a cluster add-on (`--enable-vertical-pod-autoscaling`).
+#
+# This ships VPA in updateMode: "Off" — it computes and publishes recommendations but NEVER
+# evicts pods. That's the safe default: you read `kubectl describe vpa app` and apply the numbers
+# yourself (or via CI). Do NOT combine "Auto"/"Recreate" VPA with the base's CPU/memory HPA on the
+# SAME resource — they fight. Valid combos:
+#   - VPA "Off" (recommender only) + HPA on CPU/mem      <- this component's default, always safe
+#   - VPA "Auto" on memory only    + HPA on a custom/external metric (not CPU/mem)
+#   - VPA "Auto" + no HPA (for a StatefulSet / singleton)
+resources:
+  - vpa.yaml

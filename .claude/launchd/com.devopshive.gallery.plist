@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Keeps the Munder hire-gallery HTTP server running at http://127.0.0.1:9977/
+  so importing (or re-importing) a hire in Munder never fails with "gallery not
+  reachable". KeepAlive brings it back if it crashes.
+
+  Munder Difflin itself IS auto-started on login as of 2026-08-24 — see
+  com.devopshive.munder-difflin.plist. That agent uses the built output
+  (out/main/index.js), so no Vite dev server is resident. If you'd rather run
+  Munder in dev mode, edit that plist's ProgramArguments to `npm run dev`.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.devopshive.gallery</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/vidhyashankergoel/claude-imp/claude/.claude/scripts/serve-munder-hires.py</string>
+        <string>--port</string>
+        <string>9977</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it dies; 30-second throttle so a crash-loop doesn't hammer the box. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-gallery.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-gallery.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/vidhyashankergoel</string>
+    </dict>
+</dict>
+</plist>

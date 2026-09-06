@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs obsidian-sync.py at login and every 5 minutes thereafter. Idempotent —
+  the sync script skips writes when nothing changed, so this is cheap.
+
+  Install: cp this file to ~/Library/LaunchAgents/, then:
+      launchctl unload ~/Library/LaunchAgents/com.devopshive.memory-sync.plist 2>/dev/null || true
+      launchctl load  ~/Library/LaunchAgents/com.devopshive.memory-sync.plist
+
+  Use the .claude/scripts/install-launch-agents.sh helper to do that safely.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.devopshive.memory-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/vidhyashankergoel/claude-imp/claude/.claude/scripts/obsidian-sync.py</string>
+    </array>
+
+    <!-- Run once at login so the vault is up-to-date the moment the user opens Obsidian. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Then every 5 minutes (300 s). Cheap thanks to idempotent skip. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- Nice=10: run at a slightly lower priority so it never contends with foreground work. -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Log both streams to the same file — /usr/bin/tail -f is the debug tool. -->
+    <key>StandardOutPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-sync.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-sync.stderr.log</string>
+
+    <!-- PATH so `python3` resolves cleanly when launchd runs us. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/vidhyashankergoel</string>
+    </dict>
+</dict>
+</plist>

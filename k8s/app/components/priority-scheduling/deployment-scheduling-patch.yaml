@@ -1,0 +1,62 @@
+# Strategic-merge patch onto the base Deployment. The base already sets topologySpreadConstraints
+# (zone + host) and a preferred podAntiAffinity — this ADDS priorityClassName and shows the two
+# knobs teams most often need next: pinning to a node pool, and tolerating its taint.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  template:
+    spec:
+      priorityClassName: production-high
+
+      # --- Node pool targeting (EDIT or DELETE) --------------------------------------------------
+      # Strategic-merge REPLACES the whole `affinity` map, so this repeats the base's
+      # podAntiAffinity to avoid losing it, and adds a required nodeAffinity. Delete the
+      # nodeAffinity block if you don't run dedicated pools; keep the podAntiAffinity either way.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: app
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values: ["linux"]
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64", "arm64"]   # narrow to one if your image is single-arch
+                  # Uncomment to pin to a labelled pool (EKS MNG / AKS agentpool / GKE node-pool /
+                  # kubeadm hand-labelled). The label key differs per distro:
+                  #   EKS:   eks.amazonaws.com/nodegroup
+                  #   AKS:   agentpool
+                  #   GKE:   cloud.google.com/gke-nodepool
+                  #   self:  node-pool  (whatever you set with `kubectl label node`)
+                  # - key: node-pool
+                  #   operator: In
+                  #   values: ["services"]
+
+      # --- Taint toleration (DELETE if the target pool has no taint) -----------------------------
+      # A dedicated pool is usually tainted so only opted-in workloads land there.
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: services
+          effect: NoSchedule
+        # Reschedule faster than the 300s default when a node goes unreachable — pairs with the
+        # self-healing component's Descheduler/NPD so a bad node clears quickly.
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30

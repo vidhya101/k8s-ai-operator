@@ -1,0 +1,174 @@
+name: "Deploy to Kubernetes"
+description: >
+  Cloud-agnostic deploy step. Authenticates to whichever managed Kubernetes control plane the
+  target cloud provides (or accepts a raw kubeconfig for local/self-hosted/on-prem), renders the
+  matching Kustomize overlay under k8s/app/overlays/<cloud> with the image ref pinned to the
+  digest that was just built, applies it, and blocks until the rollout is healthy — a bad rollout
+  fails the pipeline instead of silently leaving traffic on broken pods.
+
+inputs:
+  cloud:
+    description: "aws|gcp|azure|local"
+    required: true
+  namespace:
+    required: true
+  app-name:
+    required: true
+  image-ref:
+    description: "Fully-qualified, digest-pinned image ref from build-push-image"
+    required: true
+  overlay-path:
+    description: "Path to the Kustomize overlay directory for this cloud"
+    required: false
+    default: ""
+  rollout-timeout:
+    required: false
+    default: "300s"
+
+  # --- AWS EKS ---
+  aws-region:
+    required: false
+  aws-role-to-assume:
+    required: false
+  eks-cluster-name:
+    required: false
+
+  # --- GCP GKE ---
+  gcp-region:
+    required: false
+  gcp-project-id:
+    required: false
+  gcp-workload-identity-provider:
+    required: false
+  gcp-service-account:
+    required: false
+  gke-cluster-name:
+    required: false
+
+  # --- Azure AKS ---
+  azure-client-id:
+    required: false
+  azure-tenant-id:
+    required: false
+  azure-subscription-id:
+    required: false
+  aks-resource-group:
+    required: false
+  aks-cluster-name:
+    required: false
+
+  # --- local / self-hosted / on-prem ---
+  kubeconfig-content:
+    description: "Base64 or raw kubeconfig contents. Only used when cloud=local. Never logged."
+    required: false
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve default overlay path
+      id: overlay
+      shell: bash
+      run: |
+        set -euo pipefail
+        PATH_IN="${{ inputs.overlay-path }}"
+        if [ -z "$PATH_IN" ]; then
+          PATH_IN="${{ github.action_path }}/../../../k8s/app/overlays/${{ inputs.cloud }}"
+        fi
+        echo "path=$PATH_IN" >> "$GITHUB_OUTPUT"
+
+    - name: Install kubectl & kustomize
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v kubectl >/dev/null; then
+          curl -sSLo /tmp/kubectl "https://dl.k8s.io/release/$(curl -sSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x /tmp/kubectl && sudo mv /tmp/kubectl /usr/local/bin/kubectl
+        fi
+        if ! command -v kustomize >/dev/null; then
+          curl -sSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash -s /usr/local/bin
+        fi
+
+    # ---------------- cluster credentials: exactly one branch runs ----------------
+    - name: Auth to AWS (OIDC)
+      if: inputs.cloud == 'aws'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+    - if: inputs.cloud == 'aws'
+      shell: bash
+      run: aws eks update-kubeconfig --name "${{ inputs.eks-cluster-name }}" --region "${{ inputs.aws-region }}"
+
+    - name: Auth to GCP (Workload Identity Federation)
+      if: inputs.cloud == 'gcp'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-service-account }}
+    - if: inputs.cloud == 'gcp'
+      uses: google-github-actions/get-gke-credentials@v2
+      with:
+        cluster_name: ${{ inputs.gke-cluster-name }}
+        location: ${{ inputs.gcp-region }}
+        project_id: ${{ inputs.gcp-project-id }}
+
+    - name: Auth to Azure (OIDC)
+      if: inputs.cloud == 'azure'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+    - if: inputs.cloud == 'azure'
+      uses: azure/aks-set-context@v4
+      with:
+        resource-group: ${{ inputs.aks-resource-group }}
+        cluster-name: ${{ inputs.aks-cluster-name }}
+
+    - name: Load local / self-hosted kubeconfig
+      if: inputs.cloud == 'local'
+      shell: bash
+      env:
+        KUBECONFIG_CONTENT: ${{ inputs.kubeconfig-content }}
+      run: |
+        set -euo pipefail
+        if [ -z "${KUBECONFIG_CONTENT:-}" ]; then
+          echo "No kubeconfig-content given — assuming the runner already has a valid current-context (e.g. self-hosted runner inside the cluster's network, or a kind cluster created earlier in this job)."
+          exit 0
+        fi
+        mkdir -p "$HOME/.kube"
+        # Accept either base64-encoded or raw YAML.
+        if echo "$KUBECONFIG_CONTENT" | base64 -d >/tmp/kc.yaml 2>/dev/null && grep -q "apiVersion" /tmp/kc.yaml; then
+          mv /tmp/kc.yaml "$HOME/.kube/config"
+        else
+          echo "$KUBECONFIG_CONTENT" > "$HOME/.kube/config"
+        fi
+        chmod 600 "$HOME/.kube/config"
+
+    - name: Show target context (environment awareness)
+      shell: bash
+      run: |
+        echo "kubectl context: $(kubectl config current-context 2>/dev/null || echo 'unset')"
+        echo "target namespace: ${{ inputs.namespace }}"
+        echo "target cloud: ${{ inputs.cloud }}"
+
+    - name: Ensure namespace exists
+      shell: bash
+      run: kubectl get namespace "${{ inputs.namespace }}" || kubectl create namespace "${{ inputs.namespace }}"
+
+    - name: Render & apply
+      shell: bash
+      working-directory: ${{ steps.overlay.outputs.path }}
+      run: |
+        set -euo pipefail
+        kustomize edit set image "APP_IMAGE=${{ inputs.image-ref }}"
+        kustomize edit set namespace "${{ inputs.namespace }}"
+        kustomize build . | kubectl apply -f -
+
+    - name: Wait for rollout
+      shell: bash
+      run: |
+        set -euo pipefail
+        kubectl rollout status "deployment/${{ inputs.app-name }}" \
+          --namespace "${{ inputs.namespace }}" \
+          --timeout "${{ inputs.rollout-timeout }}"

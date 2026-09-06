@@ -1,0 +1,20 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "aiops-manager",
+  "description": "AIOps \u2014 anomaly detection over telemetry, alert-noise reduction (grouping/dedup/inhibit), safe auto-remediation.",
+  "character": "kelly",
+  "accent": "lemon",
+  "provider": "claude",
+  "goal": "Own AIOps \u2014 anomaly detection over telemetry, alert noise reduction (grouping/dedup/inhibit), safe auto-remediation. No silent silencing.",
+  "capabilities": [
+    "aiops",
+    "anomaly",
+    "correlation",
+    "alert-noise",
+    "auto-remediation"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

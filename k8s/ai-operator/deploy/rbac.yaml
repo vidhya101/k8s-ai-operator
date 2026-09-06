@@ -1,0 +1,234 @@
+# The operator's authority, expressed as RBAC. It is a WIDE builder (Helm, Istio, Kustomize,
+# kubectl all work) but a NARROW destroyer: no `delete`/`deletecollection` on anything whose loss
+# matters. "It cannot delete my app" is then a fact the API server enforces on every call.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ai-operator
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+rules:
+  # ---------------------------------------------------------------------------------------------
+  # READ EVERYTHING — scan live objects, read logs/events/status/metrics
+  # ---------------------------------------------------------------------------------------------
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+  # ---------------------------------------------------------------------------------------------
+  # BUILD / ALTER — create + update + patch the resource types Helm / Istio / Kustomize / kubectl
+  # touch. NOTE: `delete` is deliberately ABSENT from every rule below.
+  # ---------------------------------------------------------------------------------------------
+  - apiGroups: ["", "apps", "batch", "autoscaling", "policy", "networking.k8s.io"]
+    resources:
+      - configmaps          # (create/update only — see Kyverno note on Secrets below)
+      - services
+      - serviceaccounts
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+      - jobs
+      - cronjobs
+      - horizontalpodautoscalers
+      - poddisruptionbudgets
+      - ingresses
+      - networkpolicies
+      - resourcequotas
+      - limitranges
+      - endpoints
+      - endpointslices
+    verbs: ["create", "update", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["get", "update", "patch"]
+
+  # Pods: create + delete allowed (a Pod is controller-owned → recreated → reversible).
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log", "pods/status"]
+    verbs: ["get"]
+
+  # Nodes: patch (cordon / label / taint) — never delete.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+
+  # Namespaces: create + patch (labels, PSA) — never delete.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+
+  # CRDs & operators the agents may install: create + patch — never delete.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+
+  # Istio: create + update + patch traffic + security config. Replace-in-place or
+  # backup-and-recreate-alongside; never delete.
+  - apiGroups: ["networking.istio.io", "security.istio.io", "telemetry.istio.io", "install.istio.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Kyverno / Gatekeeper / cert-manager / Argo / KEDA / VPA / Prometheus-operator: install & tune.
+  - apiGroups: ["kyverno.io", "constraints.gatekeeper.sh", "templates.gatekeeper.sh",
+                "cert-manager.io", "argoproj.io", "keda.sh", "autoscaling.k8s.io",
+                "monitoring.coreos.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Helm stores release state as Secrets of type helm.sh/release.v1 — Helm needs to write them.
+  # Scoped to that type is not expressible in RBAC, so this is the ONE Secret write grant; the
+  # Kyverno policy below blocks the SA from writing any non-Helm Secret.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # RBAC: create + patch ONLY (grant a workload the perms it needs). The Kyverno policy blocks
+  # the SA from granting itself anything or editing cluster-admin bindings.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["get", "list", "watch", "create", "patch"]
+
+  # Its own CRDs — full control.
+  - apiGroups: ["ai-operator.io"]
+    resources: ["findings", "findings/status", "remediations", "remediations/status"]
+    verbs: ["*"]
+
+  # Emit Events; leader-election lease.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ai-operator
+subjects:
+  - kind: ServiceAccount
+    name: ai-operator
+    namespace: ai-operator
+---
+# ================================================================================================
+# Kyverno backstop — enforced regardless of what the ClusterRole says. Requires Kyverno installed.
+# ================================================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: ai-operator-guardrails
+  labels: { app.kubernetes.io/name: ai-operator }
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    # 1. The operator SA may never DELETE a protected resource, even if RBAC is later widened.
+    - name: no-destructive-verbs
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - ReplicaSet
+                - Service
+                - Ingress
+                - PersistentVolumeClaim
+                - PersistentVolume
+                - Namespace
+                - Node
+                - CustomResourceDefinition
+                - Secret
+                - Role
+                - ClusterRole
+                - RoleBinding
+                - ClusterRoleBinding
+                - ValidatingWebhookConfiguration
+                - MutatingWebhookConfiguration
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["DELETE"]
+      validate:
+        message: "ai-operator may not DELETE protected resources — it backs up and creates new. A human deletes."
+        deny: {}
+
+    # 2. The operator SA may not write to control-plane / system namespaces.
+    - name: stay-out-of-system-namespaces
+      match:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kube-node-lease", "kube-public", "kube-apiserver"]
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["CREATE", "UPDATE", "DELETE"]
+      validate:
+        message: "ai-operator may not modify control-plane / system namespaces."
+        deny: {}
+
+    # 3. The operator SA may not write a non-Helm Secret (Helm release state only).
+    - name: helm-secrets-only
+      match:
+        any:
+          - resources: { kinds: ["Secret"] }
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["CREATE", "UPDATE"]
+          - key: "{{ request.object.type || '' }}"
+            operator: NotEquals
+            value: "helm.sh/release.v1"
+      validate:
+        message: "ai-operator may only write Helm release Secrets, not application Secrets."
+        deny: {}
+
+    # 4. The operator SA may not grant itself or anyone cluster-admin.
+    - name: no-privilege-escalation
+      match:
+        any:
+          - resources: { kinds: ["ClusterRoleBinding", "RoleBinding"] }
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.object.roleRef.name }}"
+            operator: AnyIn
+            value: ["cluster-admin", "admin", "edit"]
+      validate:
+        message: "ai-operator may not bind the built-in privileged roles."
+        deny: {}

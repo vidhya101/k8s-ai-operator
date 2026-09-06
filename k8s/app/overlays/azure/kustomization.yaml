@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default   # `kustomize edit set namespace` in CI overwrites this per-environment
+
+resources:
+  - ../../base
+
+patches:
+  # Azure Workload Identity (the AAD Pod Identity successor): binds this KSA to an Entra ID
+  # application via federated credential — replace with the real client-id from
+  # terraform/modules/azure/aks. The AKS webhook also requires the
+  # `azure.workload.identity/use: "true"` label on the *pod*, added via the Deployment patch below.
+  - target:
+      kind: ServiceAccount
+      name: app
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          azure.workload.identity/client-id: "CHANGE_ME-00000000-0000-0000-0000-000000000000"
+
+  - target:
+      kind: Deployment
+      name: app
+    patch: |-
+      - op: add
+        path: /spec/template/metadata/labels/azure.workload.identity~1use
+        value: "true"
+      - op: add
+        path: /spec/template/spec/nodeSelector
+        value:
+          kubernetes.io/os: linux
+
+  # AGIC (Application Gateway Ingress Controller) — swap to `webapprouting.kubernetes.azure.com`
+  # if the cluster uses AKS's managed NGINX add-on instead.
+  - target:
+      kind: Ingress
+      name: app
+    patch: |-
+      - op: replace
+        path: /spec/ingressClassName
+        value: azure-application-gateway
+
+  - target:
+      kind: NetworkPolicy
+      name: app-allow-ingress-from-ingress-controller
+    patch: |-
+      - op: replace
+        path: /spec/ingress/0/from/0/namespaceSelector/matchLabels/kubernetes.io~1metadata.name
+        value: kube-system

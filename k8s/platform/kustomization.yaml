@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The plain-manifest parts of the platform layer. Each references a CRD that its operator must
+# already provide — `kubectl apply -k` fails otherwise with "no matches for kind". Install order:
+#
+#   1. kube-prometheus-stack   -> provides monitoring.coreos.com/PrometheusRule
+#   2. kyverno                 -> provides kyverno.io/ClusterPolicy
+#   3. Node Problem Detector + Medik8s -> provides remediation.medik8s.io/NodeHealthCheck
+#   4. THEN: kubectl apply -k k8s/platform
+#
+# Roll this to every cluster via the ArgoCD ApplicationSet in fleet/README.md — do not apply it
+# by hand per cluster once you have more than one.
+#
+# NOT included here (intentionally):
+#   remediation/remediation-map.yaml  -> agent/sensor config, not a cluster object. Mount as a
+#                                        ConfigMap for an in-cluster sensor, or the agent reads it
+#                                        from the repo. Uncomment the configMapGenerator below to
+#                                        ship it as a ConfigMap.
+#   observability/*                   -> Helm charts, see observability/README.md
+
+resources:
+  - detection/prometheus-rules.yaml
+  - detection/kyverno-enforce.yaml
+  - remediation/node-auto-recovery.yaml
+
+# configMapGenerator:
+#   - name: remediation-map
+#     namespace: platform-system
+#     files:
+#       - remediation-map.yaml=remediation/remediation-map.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: platform
+      app.kubernetes.io/component: self-healing

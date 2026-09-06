@@ -1,0 +1,21 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "mlops-manager",
+  "description": "MLOps \u2014 reproducible training, experiment tracking, model registry + promotion, serving (KServe/vLLM), drift detection.",
+  "character": "ryan",
+  "accent": "peach",
+  "provider": "claude",
+  "goal": "Own MLOps \u2014 reproducible training, experiment tracking, model registry + promotion, serving, drift detection. Model lineage always intact.",
+  "capabilities": [
+    "mlops",
+    "training",
+    "experiment",
+    "model-registry",
+    "serving",
+    "drift"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

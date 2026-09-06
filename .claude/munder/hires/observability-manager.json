@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "observability-manager",
+  "description": "Metrics/logs/traces/errors stack \u2014 Prometheus, Grafana, Loki, Datadog, Dynatrace, OpenTelemetry. Instrument before ship.",
+  "character": "pam",
+  "accent": "lemon",
+  "provider": "claude",
+  "goal": "Own the metrics/logs/traces/errors stack \u2014 Prometheus, Grafana, Loki, OTel. Instrument every service before it ships.",
+  "capabilities": [
+    "metrics",
+    "logs",
+    "traces",
+    "prometheus",
+    "grafana",
+    "loki",
+    "datadog",
+    "otel"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

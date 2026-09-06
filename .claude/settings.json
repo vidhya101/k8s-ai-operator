@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "defaultMode": "default",
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Bash(pwd)",
+      "Bash(ls:*)",
+      "Bash(tree:*)",
+      "Bash(find:*)",
+      "Bash(file:*)",
+      "Bash(stat:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(diff:*)",
+      "Bash(which:*)",
+      "Bash(type:*)",
+      "Bash(command -v:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch -a)",
+      "Bash(git rev-parse:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git blame:*)",
+      "Bash(git stash list:*)",
+      "Bash(git remote -v)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh workflow list:*)",
+      "Bash(gh workflow view:*)",
+      "Bash(gh secret list:*)",
+      "Bash(gh api -X GET:*)",
+      "Bash(terraform version)",
+      "Bash(terraform fmt -check:*)",
+      "Bash(terraform validate:*)",
+      "Bash(terraform providers:*)",
+      "Bash(terraform workspace show)",
+      "Bash(terraform workspace list)",
+      "Bash(terraform state list:*)",
+      "Bash(terraform state show:*)",
+      "Bash(terraform output:*)",
+      "Bash(terraform show:*)",
+      "Bash(terraform plan:*)",
+      "Bash(terraform graph:*)",
+      "Bash(ansible --version)",
+      "Bash(ansible-playbook --version)",
+      "Bash(ansible-playbook --syntax-check:*)",
+      "Bash(ansible-playbook --check:*)",
+      "Bash(ansible-lint:*)",
+      "Bash(ansible-inventory:*)",
+      "Bash(docker --version)",
+      "Bash(docker version:*)",
+      "Bash(docker images:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker inspect:*)",
+      "Bash(docker history:*)",
+      "Bash(docker compose config:*)",
+      "Bash(kubectl version:*)",
+      "Bash(kubectl config current-context)",
+      "Bash(kubectl config get-contexts:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl explain:*)",
+      "Bash(kubectl diff:*)",
+      "Bash(kubectl auth can-i:*)",
+      "Bash(kubectl top:*)",
+      "Bash(kustomize build:*)",
+      "Bash(helm version:*)",
+      "Bash(helm list:*)",
+      "Bash(helm status:*)",
+      "Bash(helm get:*)",
+      "Bash(helm lint:*)",
+      "Bash(helm template:*)",
+      "Bash(helm diff upgrade:*)",
+      "Bash(argocd version:*)",
+      "Bash(argocd app list:*)",
+      "Bash(argocd app get:*)",
+      "Bash(argocd app diff:*)",
+      "Bash(argocd app history:*)",
+      "Bash(trivy --version)",
+      "Bash(trivy fs:*)",
+      "Bash(trivy config:*)",
+      "Bash(trivy image:*)",
+      "Bash(checkov --version)",
+      "Bash(checkov -d:*)",
+      "Bash(checkov -f:*)",
+      "Bash(tflint --version)",
+      "Bash(tflint --init)",
+      "Bash(tflint:*)",
+      "Bash(kubeconform -v)",
+      "Bash(kubeconform:*)",
+      "Bash(promtool --version)",
+      "Bash(promtool check:*)",
+      "Bash(node_exporter --version)",
+      "Bash(promtail --version)",
+      "Bash(promtail -check-syntax:*)",
+      "Bash(mlflow --version)",
+      "Bash(airflow version)",
+      "Bash(airflow dags list:*)",
+      "Bash(airflow dags list-runs:*)",
+      "Bash(airflow tasks list:*)",
+      "Bash(kfp --version)",
+      "Bash(dt --version)",
+      "Bash(mysql --version)",
+      "Bash(psql --version)",
+      "Bash(mongosh --version)",
+      "Bash(mongo --version)",
+      "Bash(sqlplus -v)",
+      "Bash(vault status)",
+      "Bash(vault kv list:*)",
+      "Bash(vault policy list:*)",
+      "Bash(jq:*)",
+      "Bash(yq:*)",
+      "Bash(shellcheck:*)",
+      "Bash(python3 -m py_compile:*)",
+      "Bash(python3 --version)",
+      "Edit",
+      "Write",
+      "Bash(terraform init:*)",
+      "Bash(terraform fmt:*)",
+      "Bash(git add:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "Bash(git tag:*)",
+      "Bash(git worktree:*)",
+      "Bash(npm install:*)",
+      "Bash(npm ci:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 install:*)",
+      "Bash(poetry install:*)",
+      "Bash(go mod download:*)"
+    ],
+    "ask": [
+      "Bash(terraform apply:*)",
+      "Bash(terraform destroy:*)",
+      "Bash(terraform import:*)",
+      "Bash(terraform state mv:*)",
+      "Bash(terraform state rm:*)",
+      "Bash(terraform state pull:*)",
+      "Bash(terraform state push:*)",
+      "Bash(terraform state replace-provider:*)",
+      "Bash(terraform force-unlock:*)",
+      "Bash(ansible-playbook:*)",
+      "Bash(ansible-galaxy install:*)",
+      "Bash(docker build:*)",
+      "Bash(docker run:*)",
+      "Bash(docker compose up:*)",
+      "Bash(docker push:*)",
+      "Bash(docker login:*)",
+      "Bash(kubectl apply:*)",
+      "Bash(kubectl create:*)",
+      "Bash(kubectl patch:*)",
+      "Bash(kubectl edit:*)",
+      "Bash(kubectl scale:*)",
+      "Bash(kubectl rollout restart:*)",
+      "Bash(kubectl cordon:*)",
+      "Bash(kubectl uncordon:*)",
+      "Bash(kubectl drain:*)",
+      "Bash(kubectl delete:*)",
+      "Bash(kustomize edit:*)",
+      "Bash(helm install:*)",
+      "Bash(helm upgrade:*)",
+      "Bash(helm rollback:*)",
+      "Bash(helm uninstall:*)",
+      "Bash(argocd app create:*)",
+      "Bash(argocd app set:*)",
+      "Bash(argocd app sync:*)",
+      "Bash(argocd app rollback:*)",
+      "Bash(argocd app delete:*)",
+      "Bash(aws:*)",
+      "Bash(az:*)",
+      "Bash(gcloud:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr close:*)",
+      "Bash(gh issue create:*)",
+      "Bash(gh workflow run:*)",
+      "Bash(gh secret set:*)",
+      "Bash(gh release create:*)",
+      "Bash(gh repo create:*)",
+      "Bash(mysql:*)",
+      "Bash(psql:*)",
+      "Bash(mongosh:*)",
+      "Bash(mongo:*)",
+      "Bash(sqlplus:*)",
+      "Bash(vault read:*)",
+      "Bash(vault write:*)",
+      "Bash(vault kv get:*)",
+      "Bash(vault kv put:*)",
+      "Bash(vault delete:*)",
+      "Bash(vault kv delete:*)",
+      "Bash(airflow dags trigger:*)",
+      "Bash(airflow dags pause:*)",
+      "Bash(airflow dags unpause:*)",
+      "Bash(airflow dags delete:*)",
+      "Bash(airflow tasks run:*)",
+      "Bash(mlflow gc:*)",
+      "Bash(mlflow experiments delete:*)",
+      "Bash(mlflow runs delete:*)",
+      "Bash(kfp run submit:*)",
+      "Bash(kfp run delete:*)",
+      "Bash(kfp pipeline delete:*)",
+      "Bash(dt:*)"
+    ],
+    "deny": [
+      "Read(**/terra-key-ec2)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*.env)",
+      "Read(**/devops-tokens.env)",
+      "Read(**/tokens.env)",
+      "Read(**/*.tfstate)",
+      "Read(**/*.tfstate.*)",
+      "Read(**/kubeconfig)",
+      "Read(**/.kube/config)",
+      "Read(**/id_rsa)",
+      "Read(**/id_ed25519)",
+      "Read(**/id_ecdsa)",
+      "Read(**/id_dsa)",
+      "Read(**/.pgpass)",
+      "Read(**/.my.cnf)",
+      "Read(**/.netrc)",
+      "Read(**/*.p12)",
+      "Read(**/*.pfx)",
+      "Read(**/cwallet.sso)",
+      "Read(**/ewallet.p12)",
+      "Bash(terraform apply -auto-approve:*)",
+      "Bash(terraform destroy -auto-approve:*)",
+      "Bash(terraform state push -force:*)",
+      "Bash(terraform force-unlock -force:*)",
+      "Bash(kubectl delete namespace:*)",
+      "Bash(kubectl delete node:*)",
+      "Bash(kubectl delete crd:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(rm -rf:*)",
+      "Bash(sudo rm:*)",
+      "Bash(chmod 777:*)",
+      "Bash(docker system prune:*)",
+      "Bash(docker volume prune:*)",
+      "Bash(curl:*|*sh)",
+      "Bash(wget:*|*sh)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/block-secret-reads.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/terraform-fmt.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/audit-log.sh\""
+          },
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/task-audit-log.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/task-audit-log.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >/dev/null || true; command -v code-review-graph >/dev/null 2>&1 || exit 0; git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph update --skip-flows --repo \"$(git rev-parse --show-toplevel 2>/dev/null)\" || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-context.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat >/dev/null || true; command -v code-review-graph >/dev/null 2>&1 || exit 0; git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph status --repo \"$(git rev-parse --show-toplevel 2>/dev/null)\" || echo 'Not a git repo, skipping'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/session-recap-reminder.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

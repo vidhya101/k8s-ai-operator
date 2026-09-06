@@ -1,0 +1,25 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "cloud-manager-codex",
+  "description": "[codex fallback] AWS/Azure/GCP architecture \u2014 landing zones, IAM, networking, cost. Free-tier-first; $50 CAD/month hard ceiling.",
+  "character": "jim",
+  "accent": "lemon",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for cloud-manager. Own AWS/Azure/GCP architecture and cost \u2014 landing zones, IAM boundaries, budgets. Free-tier-first; hard $50 CAD/month ceiling.",
+  "capabilities": [
+    "aws",
+    "azure",
+    "gcp",
+    "cloud",
+    "landing-zone",
+    "iam",
+    "networking",
+    "cost",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

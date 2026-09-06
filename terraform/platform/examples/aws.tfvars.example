@@ -1,0 +1,16 @@
+# cp into terraform/platform/aws/aws.auto.tfvars (or pass -var-file=) and fill in the real values —
+# account IDs/region aren't secrets, but treat this file as a starting point, not a drop-in.
+
+name               = "my-platform"
+environment        = "dev"
+kubernetes_version = "1.30"
+
+aws_region = "us-east-1"
+aws_azs    = ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+node_min_count = 2
+node_max_count = 5
+
+tags = {
+  team = "platform"
+}

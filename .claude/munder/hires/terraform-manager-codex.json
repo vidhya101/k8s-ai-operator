@@ -1,0 +1,24 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "terraform-manager-codex",
+  "description": "[codex fallback] Terraform IaC \u2014 modules, backend/lock state, plan review, Checkov/tfsec, brownfield reverse-engineering. Never auto-apply.",
+  "character": "angela",
+  "accent": "peach",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for terraform-manager. Own Terraform IaC \u2014 modules, state (backend + locking), plan review, Checkov/tfsec gate. Never apply without explicit sign-off.",
+  "capabilities": [
+    "terraform",
+    "iac",
+    "state",
+    "modules",
+    "checkov",
+    "tfsec",
+    "plan",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

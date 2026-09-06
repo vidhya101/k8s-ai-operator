@@ -1,0 +1,200 @@
+# PREVENTION layer — Kyverno admission policies. This is where "fix any bad YAML / config / image /
+# namespace issue" is really solved: the malformed or unsafe object is rejected (or auto-corrected,
+# or auto-completed) at admission, before it can become a running incident.
+#
+# Requires Kyverno installed:  helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+#
+# ROLLOUT DISCIPLINE (do not skip):
+#   1. Apply everything with `validationFailureAction: Audit` (this file's default). Nothing is blocked.
+#   2. Watch `kubectl get policyreport -A` / the Kyverno Grafana dashboard for a week.
+#   3. Fix or exclude the legitimate violators.
+#   4. Flip policies to `Enforce` one at a time, lowest-blast-radius first.
+#
+# Namespaces opt out of blocking with the label `platform.io/policy-mode: audit`.
+# System namespaces are excluded in every policy (kube-system, kube-node-lease, kube-public,
+# kyverno, monitoring). YAML anchors are NOT used because they don't cross `---` document
+# boundaries — each policy repeats its exclude block.
+#
+# NOTE: the cheapest structural checks (no :latest, requests present) can also be done with the
+# built-in ValidatingAdmissionPolicy (CEL, no webhook on the hot path, >= 1.30). Prefer VAP for
+# high-QPS clusters and keep Kyverno for mutate/generate + the richer logic.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: images-must-be-safe
+  annotations:
+    policies.kyverno.io/description: "Digest-pinned or explicit non-latest tag, from an allowed registry."
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: no-latest-tag
+      match:
+        any: [{ resources: { kinds: ["Pod"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/policy-mode": "audit" } } }
+      validate:
+        message: "Image must not use ':latest' or an implicit (missing) tag."
+        foreach:
+          - list: "request.object.spec.[initContainers, containers, ephemeralContainers][]"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ regex_match('^[^:]+$|:latest$', '{{ element.image }}') }}"
+                    operator: Equals
+                    value: true
+    - name: allowed-registries-only
+      match:
+        any: [{ resources: { kinds: ["Pod"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/policy-mode": "audit" } } }
+      validate:
+        message: "Image registry not in the allowlist. Edit this policy to add yours."
+        foreach:
+          - list: "request.object.spec.[initContainers, containers][]"
+            pattern:
+              # EDIT for your org: ECR / GAR / ACR / GHCR / internal Nexus / Harbor.
+              image: "ghcr.io/* | *.dkr.ecr.*.amazonaws.com/* | *-docker.pkg.dev/* | *.azurecr.io/* | registry.k8s.io/*"
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: workloads-must-be-operable
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-probes
+      match:
+        any: [{ resources: { kinds: ["Deployment", "StatefulSet", "DaemonSet"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/policy-mode": "audit" } } }
+      validate:
+        message: "Every container needs readinessProbe + livenessProbe (self-healing depends on them)."
+        foreach:
+          - list: "request.object.spec.template.spec.containers[]"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.readinessProbe || '' }}"
+                    operator: Equals
+                    value: ""
+                  - key: "{{ element.livenessProbe || '' }}"
+                    operator: Equals
+                    value: ""
+    - name: require-resources
+      match:
+        any: [{ resources: { kinds: ["Pod"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/policy-mode": "audit" } } }
+      validate:
+        message: "Containers must set requests + limits for cpu and memory."
+        foreach:
+          - list: "request.object.spec.containers[]"
+            pattern:
+              resources:
+                requests: { cpu: "?*", memory: "?*" }
+                limits: { cpu: "?*", memory: "?*" }
+---
+# AUTO-COMPLETE a namespace the moment it's created: default-deny NetworkPolicy + DNS-egress allow
+# + a starter ResourceQuota, so "any namespace issue / any space issue" can't exist in the form of
+# an unbounded, wide-open namespace.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: namespace-autocomplete
+spec:
+  rules:
+    - name: default-deny-netpol
+      match:
+        any: [{ resources: { kinds: ["Namespace"] } }]
+      exclude:
+        any: [{ resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] } }]
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: default-deny-all
+        namespace: "{{ request.object.metadata.name }}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes: ["Ingress", "Egress"]
+    - name: allow-dns-egress
+      match:
+        any: [{ resources: { kinds: ["Namespace"] } }]
+      exclude:
+        any: [{ resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] } }]
+      generate:
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        name: allow-dns-egress
+        namespace: "{{ request.object.metadata.name }}"
+        synchronize: true
+        data:
+          spec:
+            podSelector: {}
+            policyTypes: ["Egress"]
+            egress:
+              - to: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "kube-system" } } }]
+                ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+    - name: starter-quota
+      match:
+        any: [{ resources: { kinds: ["Namespace"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/quota": "custom" } } }
+      generate:
+        apiVersion: v1
+        kind: ResourceQuota
+        name: starter-quota
+        namespace: "{{ request.object.metadata.name }}"
+        synchronize: false        # a starting point teams then tune; don't fight their edits
+        data:
+          spec:
+            hard:
+              requests.cpu: "8"
+              requests.memory: 16Gi
+              limits.cpu: "16"
+              limits.memory: 32Gi
+              pods: "100"
+              services.loadbalancers: "2"
+---
+# AUTO-CORRECT what can be safely defaulted rather than rejected — a mutate policy so teams aren't
+# blocked on boilerplate. Adds seccompProfile + drops caps + readOnlyRootFilesystem if absent.
+# `+(field)` = "add only if not already present" (Kyverno anchor), so an explicit team choice wins.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: pod-security-defaults
+spec:
+  rules:
+    - name: add-safe-defaults
+      match:
+        any: [{ resources: { kinds: ["Pod"] } }]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease", "kube-public", "kyverno", "monitoring"] }
+          - resources: { selector: { matchLabels: { "platform.io/policy-mode": "audit" } } }
+      mutate:
+        patchStrategicMerge:
+          spec:
+            securityContext:
+              +(seccompProfile): { type: RuntimeDefault }
+              +(runAsNonRoot): true
+            containers:
+              - (name): "*"
+                securityContext:
+                  +(allowPrivilegeEscalation): false
+                  +(readOnlyRootFilesystem): true
+                  +(capabilities): { drop: ["ALL"] }

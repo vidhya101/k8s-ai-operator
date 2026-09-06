@@ -1,0 +1,54 @@
+{
+  "name": "devops-hive-vscode-context",
+  "displayName": "DevOps Hive VS Code Context",
+  "description": "Publishes the currently-open file, selection, and workspace roots to ~/DevOpsHive/state/vscode-context.md so Claude Code + Munder agents can see what you're working on right now.",
+  "version": "0.1.0",
+  "publisher": "vidhya",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devopsHive.publishContextNow",
+        "title": "DevOps Hive: Publish Context Now"
+      },
+      {
+        "command": "devopsHive.openContextFile",
+        "title": "DevOps Hive: Open Context File"
+      }
+    ],
+    "configuration": {
+      "title": "DevOps Hive Context",
+      "properties": {
+        "devopsHive.contextPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to write the context file. Empty = ~/DevOpsHive/state/vscode-context.md"
+        },
+        "devopsHive.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "description": "Debounce interval in milliseconds — rapid file switches / selection changes coalesce to one write."
+        },
+        "devopsHive.includeSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include current selection text in the context file (truncated to 2KB). Turn off if editing sensitive code you don't want agents to see."
+        }
+      }
+    }
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "agents",
+    "context"
+  ]
+}

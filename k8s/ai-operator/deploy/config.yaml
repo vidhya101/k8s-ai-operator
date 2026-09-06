@@ -1,0 +1,37 @@
+# Runtime configuration. Edit live — the operator re-reads it each loop.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-operator-config
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+data:
+  # ----- master switches -----------------------------------------------------------------------
+  paused: "false"                    # hard stop
+  mode: "observe"                    # observe = scan + report only | assist = auto low-risk + PR rest | auto = auto all allowlisted
+  # ----- what to scan ------------------------------------------------------------------------------
+  scanGitEnabled: "true"
+  scanClusterEnabled: "true"
+  scanIntervalSeconds: "900"         # full sweep cadence; watch-driven reaction is immediate
+  gitBranchBase: "main"
+  gitBranchPrefix: "ai-operator/"
+  watchNamespaces: ""                # empty = all (except system + those labelled ai-operator.io/policy=manual)
+  excludeNamespaces: "kube-system,kube-node-lease,kube-public,ai-operator,cert-manager,kyverno"
+  # ----- remediation policy ---------------------------------------------------------------------
+  autoApplyRiskClasses: "low"        # in assist mode: which riskClass may be applied without a human
+  allowedCharts: "ingress-nginx,kube-prometheus-stack,metrics-server,cert-manager,kyverno,vpa,keda"
+  allowOpenPorts: "true"             # may the operator create Service/Ingress/Gateway/NetworkPolicy
+  maxChangesPerTargetPerHour: "3"
+  maxChangesClusterWidePer10Min: "8"
+  requireHealthyControlPlane: "true"
+  backupRetentionDays: "30"
+  # ----- models (override per agent; must exist in Ollama or pull-models.sh will fetch them) ----
+  model.coordinator: "llama3:8b"
+  model.scanner: "deepseek-coder:6.7b"
+  model.security: "mixtral:latest"
+  model.securityFallback: "llama3:latest"
+  model.remediator: "codellama:13b"
+  model.gitops: "llama3:8b"
+  model.embedding: "nomic-embed-text"
+  ollamaTimeoutSeconds: "180"
+  ollamaMaxConcurrent: "2"           # keep low — big models are RAM-bound on a laptop

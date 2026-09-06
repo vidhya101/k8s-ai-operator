@@ -1,0 +1,219 @@
+name: "Build, Scan, Sign & Push Image"
+description: >
+  Cloud-agnostic container supply-chain step: resolves a Dockerfile (repo-native if present,
+  else the language template), builds multi-arch with Buildx, scans the built image with Trivy,
+  generates an SBOM with Syft, pushes to whichever registry the target cloud uses, and signs +
+  attests keylessly with Cosign (OIDC — no stored signing key). Requires the caller job to set
+  `permissions: { id-token: write, contents: read, packages: write }`.
+
+inputs:
+  cloud:
+    description: "aws|gcp|azure|local — selects the registry and its auth method"
+    required: true
+  language:
+    description: "Selects the fallback Dockerfile template when the repo has none of its own"
+    required: true
+  dockerfile:
+    description: "Explicit Dockerfile path override. Empty = auto-resolve (./Dockerfile, else template)."
+    required: false
+    default: ""
+  build-context:
+    required: false
+    default: "."
+  image-name:
+    description: "Repository-relative image name, e.g. my-service"
+    required: true
+  image-tag:
+    required: true
+  platforms:
+    description: "Comma-separated buildx platforms"
+    required: false
+    default: "linux/amd64,linux/arm64"
+  fail-on-severity:
+    required: false
+    default: "CRITICAL,HIGH"
+
+  # --- AWS ECR ---
+  aws-region:
+    required: false
+  aws-account-id:
+    required: false
+  aws-role-to-assume:
+    required: false
+
+  # --- GCP Artifact Registry ---
+  gcp-region:
+    required: false
+  gcp-project-id:
+    required: false
+  gcp-workload-identity-provider:
+    required: false
+  gcp-service-account:
+    required: false
+
+  # --- Azure ACR ---
+  azure-acr-name:
+    required: false
+  azure-client-id:
+    required: false
+  azure-tenant-id:
+    required: false
+  azure-subscription-id:
+    required: false
+
+outputs:
+  image-ref:
+    description: "Fully-qualified, digest-pinned image reference that was pushed"
+    value: ${{ steps.resolve-ref.outputs.image_ref }}
+  digest:
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve Dockerfile
+      id: dockerfile
+      shell: bash
+      run: |
+        set -euo pipefail
+        DF="${{ inputs.dockerfile }}"
+        if [ -z "$DF" ]; then
+          if [ -f "${{ inputs.build-context }}/Dockerfile" ]; then
+            DF="${{ inputs.build-context }}/Dockerfile"
+          else
+            DF="${{ github.action_path }}/../../../docker/templates/${{ inputs.language }}.Dockerfile"
+          fi
+        fi
+        echo "Using Dockerfile: $DF"
+        echo "path=$DF" >> "$GITHUB_OUTPUT"
+
+    - name: Set up QEMU (multi-arch)
+      uses: docker/setup-qemu-action@v3
+
+    - name: Set up Buildx
+      uses: docker/setup-buildx-action@v3
+
+    # ---------------- registry auth: exactly one branch runs ----------------
+    - name: Auth to AWS (OIDC) + ECR login
+      if: inputs.cloud == 'aws'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - if: inputs.cloud == 'aws'
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws ecr get-login-password --region "${{ inputs.aws-region }}" | \
+          docker login --username AWS --password-stdin "${{ inputs.aws-account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com"
+        aws ecr describe-repositories --repository-names "${{ inputs.image-name }}" --region "${{ inputs.aws-region }}" >/dev/null 2>&1 || \
+          aws ecr create-repository --repository-name "${{ inputs.image-name }}" --region "${{ inputs.aws-region }}" \
+            --image-scanning-configuration scanOnPush=true --encryption-configuration encryptionType=KMS >/dev/null
+
+    - name: Auth to GCP (Workload Identity Federation)
+      if: inputs.cloud == 'gcp'
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.gcp-workload-identity-provider }}
+        service_account: ${{ inputs.gcp-service-account }}
+
+    - if: inputs.cloud == 'gcp'
+      uses: google-github-actions/setup-gcloud@v2
+    - if: inputs.cloud == 'gcp'
+      shell: bash
+      run: gcloud auth configure-docker "${{ inputs.gcp-region }}-docker.pkg.dev" --quiet
+
+    - name: Auth to Azure (OIDC)
+      if: inputs.cloud == 'azure'
+      uses: azure/login@v2
+      with:
+        client-id: ${{ inputs.azure-client-id }}
+        tenant-id: ${{ inputs.azure-tenant-id }}
+        subscription-id: ${{ inputs.azure-subscription-id }}
+
+    - if: inputs.cloud == 'azure'
+      shell: bash
+      run: az acr login --name "${{ inputs.azure-acr-name }}"
+
+    - name: Auth to GHCR (local / default registry)
+      if: inputs.cloud == 'local'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        # `secrets.*` isn't readable inside a composite action — `github.token` is the same
+        # automatic GITHUB_TOKEN value and IS available here.
+        password: ${{ github.token }}
+
+    - name: Resolve fully-qualified image ref
+      id: resolve-ref
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "${{ inputs.cloud }}" in
+          aws)   REGISTRY="${{ inputs.aws-account-id }}.dkr.ecr.${{ inputs.aws-region }}.amazonaws.com" ;;
+          gcp)   REGISTRY="${{ inputs.gcp-region }}-docker.pkg.dev/${{ inputs.gcp-project-id }}/${{ inputs.image-name }}" ;;
+          azure) REGISTRY="${{ inputs.azure-acr-name }}.azurecr.io" ;;
+          local) REGISTRY="ghcr.io/${{ github.repository_owner }}" ;;
+          *) echo "::error::Unsupported cloud '${{ inputs.cloud }}'"; exit 1 ;;
+        esac
+        # GCP's ref already embeds the image name as the last path segment.
+        if [ "${{ inputs.cloud }}" = "gcp" ]; then
+          REF="${REGISTRY}:${{ inputs.image-tag }}"
+        else
+          REF="${REGISTRY}/${{ inputs.image-name }}:${{ inputs.image-tag }}"
+        fi
+        echo "image_ref=$REF" >> "$GITHUB_OUTPUT"
+
+    - name: Build & push
+      id: push
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.build-context }}
+        file: ${{ steps.dockerfile.outputs.path }}
+        platforms: ${{ inputs.platforms }}
+        push: true
+        tags: ${{ steps.resolve-ref.outputs.image_ref }}
+        provenance: true
+        sbom: false # Syft step below produces a richer SBOM we attach explicitly
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Scan pushed image (Trivy)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: "image"
+        image-ref: "${{ steps.resolve-ref.outputs.image_ref }}@${{ steps.push.outputs.digest }}"
+        severity: ${{ inputs.fail-on-severity }}
+        exit-code: "1"
+        ignore-unfixed: true
+        format: "table"
+
+    - name: Generate SBOM (Syft, SPDX)
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+        syft "${{ steps.resolve-ref.outputs.image_ref }}@${{ steps.push.outputs.digest }}" \
+          -o spdx-json > sbom.spdx.json
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Keyless sign image + attach SBOM attestation
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: "1"
+      run: |
+        set -euo pipefail
+        DIGEST_REF="${{ steps.resolve-ref.outputs.image_ref }}@${{ steps.push.outputs.digest }}"
+        cosign sign --yes "$DIGEST_REF"
+        cosign attest --yes --predicate sbom.spdx.json --type spdxjson "$DIGEST_REF"
+
+    - name: Upload SBOM artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: sbom-${{ inputs.image-name }}-${{ inputs.image-tag }}
+        path: sbom.spdx.json
+        retention-days: 90

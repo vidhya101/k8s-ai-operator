@@ -1,0 +1,82 @@
+# Default-deny both directions, then explicitly allow only what's needed. This is the single
+# biggest difference between a "works" cluster and a "survives an audit" cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-default-deny
+  labels:
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector: {}          # applies to every pod in the namespace
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-allow-ingress-from-ingress-controller
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: app
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # Namespace label the ingress controller's namespace must carry. The concrete value
+        # (ingress-nginx / kube-system for cloud LB controllers) is patched per overlay.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-namespace-placeholder
+      ports:
+        - port: http
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-allow-egress-dns
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: app
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Egress to the public internet (external APIs, cloud metadata/service endpoints over TLS).
+# Scope this down per-workload in an overlay (an `to.ipBlock` allowlist) wherever the app's
+# actual dependencies are known — "allow all :443 egress" is the permissive default for a
+# reusable template, not the end state for a hardened production namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: app-allow-egress-https
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: app
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["169.254.169.254/32"]   # block the cloud instance-metadata endpoint by default
+      ports:
+        - port: 443
+          protocol: TCP

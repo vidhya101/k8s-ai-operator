@@ -1,0 +1,33 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: app
+  updatePolicy:
+    # "Off"       -> recommendations only, no eviction (SAFE DEFAULT — read via `kubectl describe vpa app`)
+    # "Initial"   -> set requests only at pod creation, never evict a running pod
+    # "Recreate"  -> evict + recreate pods to apply new requests (disruptive; needs a PDB — base has one)
+    # "Auto"      -> currently == Recreate; in-place resize is behind a feature gate on newer clusters
+    updateMode: "Off"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: app
+        controlledResources: ["cpu", "memory"]
+        # controlledValues: RequestsAndLimits keeps the base's limit/request ratio; use
+        # RequestsOnly if you want to pin limits manually.
+        controlledValues: RequestsAndLimits
+        # Floor/ceiling so a recommendation can't propose something absurd. Keep the min aligned
+        # with the base LimitRange min and the max within the namespace ResourceQuota headroom.
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: "2"
+          memory: 2Gi

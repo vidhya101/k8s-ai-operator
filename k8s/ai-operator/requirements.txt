@@ -1,0 +1,6 @@
+# Pin for reproducibility. Bump deliberately.
+kopf==1.37.2
+kubernetes==30.1.0
+httpx==0.27.2
+PyYAML==6.0.2
+numpy==2.1.1

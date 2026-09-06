@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Auto-starts Munder Difflin (the Electron multi-agent office harness) at
+  login. Overrides the prior decision (documented in gallery.plist) not to
+  auto-start Munder — the user explicitly asked for this on 2026-08-24.
+
+  Uses the BUILT output (out/main/index.js via package.json main) — NOT
+  `npm run dev`, so no Vite dev server sits resident. Footprint is just the
+  packaged Electron processes (main + renderer + GPU helper).
+
+  Cmd-Q is respected: KeepAlive={SuccessfulExit=false} only relaunches on
+  crash, not on a clean quit. ThrottleInterval=30 prevents crash-loop
+  hammering the box.
+
+  LimitLoadToSessionType=Aqua binds the agent to the interactive login
+  session so it has WindowServer access to draw the UI (mandatory for GUI).
+
+  ANTHROPIC_BASE_URL (added 2026-08-25): routes every hive agent's Claude
+  Code CLI through the local headroom compression proxy (see
+  com.devopshive.headroom-proxy.plist) instead of api.anthropic.com
+  directly. Munder's own per-agent proxy sidecar reads this env var as its
+  upstream at spawn time (verified against hive.ts — the sidecar falls back
+  to https://api.anthropic.com if unset). headroom then forwards on to the
+  real Anthropic API transparently — no separate credentials needed here,
+  Claude Code's own auth headers pass straight through. The headroom-proxy
+  launchd agent MUST be loaded before Munder starts, or agents spawned in
+  that window fall back to hitting Anthropic directly (harmless, just
+  uncompressed) until Munder is restarted again.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.devopshive.munder-difflin</string>
+
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/vidhyashankergoel/claude-imp/munder-difflin</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/vidhyashankergoel/claude-imp/munder-difflin/node_modules/.bin/electron</string>
+        <string>/Users/vidhyashankergoel/claude-imp/munder-difflin</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Relaunch only on crash, not on user-initiated Cmd-Q. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-munder.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-munder.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/vidhyashankergoel</string>
+        <key>ANTHROPIC_BASE_URL</key>
+        <string>http://127.0.0.1:8787</string>
+    </dict>
+</dict>
+</plist>

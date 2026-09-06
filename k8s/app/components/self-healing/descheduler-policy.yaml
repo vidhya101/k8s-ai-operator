@@ -1,0 +1,56 @@
+# REFERENCE — apply once per cluster, not per app. Not referenced by this component's
+# kustomization.yaml. This is the policy the Descheduler CronJob reads; the Helm chart usually
+# manages it, so prefer `--set-file` / chart values over applying this directly if you installed
+# via Helm.
+#
+# What each strategy buys you (all part of "self-healing" — the scheduler places a pod once and
+# never revisits the decision; the descheduler is what revisits it):
+#   RemovePodsViolatingNodeTaints    - a node got a NoSchedule taint after pods landed -> evict them
+#   RemovePodsViolatingNodeAffinity  - node labels changed / affinity no longer satisfied -> evict
+#   RemovePodsViolatingInterPodAntiAffinity - anti-affinity violated after the fact -> evict
+#   LowNodeUtilization               - drain hot nodes toward the average so one node isn't the SPOF
+#   RemovePodsViolatingTopologySpreadConstraint - re-spread after a node/zone recovers
+#   RemoveFailedPods                 - clear stuck Failed pods the GC missed
+#
+# The Descheduler NEVER evicts a pod that would breach a PDB, a pod without a controller, a
+# static/mirror/DaemonSet pod, or (by default) a pod with local storage — so it composes safely
+# with the base's PodDisruptionBudget.
+apiVersion: descheduler/v1alpha2
+kind: DeschedulerPolicy
+metadata:
+  name: cluster
+profiles:
+  - name: default
+    pluginConfig:
+      - name: DefaultEvictor
+        args:
+          evictSystemCriticalPods: false
+          evictFailedBarePods: true
+          ignorePvcPods: true
+          nodeFit: true          # only evict if the pod can actually be placed somewhere better
+      - name: LowNodeUtilization
+        args:
+          thresholds:
+            cpu: 20
+            memory: 20
+            pods: 20
+          targetThresholds:
+            cpu: 70
+            memory: 70
+            pods: 70
+      - name: RemovePodsViolatingTopologySpreadConstraint
+        args:
+          constraints:
+            - DoNotSchedule
+            - ScheduleAnyway
+    plugins:
+      balance:
+        enabled:
+          - LowNodeUtilization
+          - RemovePodsViolatingTopologySpreadConstraint
+      deschedule:
+        enabled:
+          - RemovePodsViolatingNodeTaints
+          - RemovePodsViolatingNodeAffinity
+          - RemovePodsViolatingInterPodAntiAffinity
+          - RemoveFailedPods

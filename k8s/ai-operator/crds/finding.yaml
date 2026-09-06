@@ -1,0 +1,93 @@
+# A Finding is one thing an agent noticed. Agents create these; the coordinator triages them;
+# humans can see them (`kubectl get findings`) and steer them (annotation `ai-operator.io/decision`).
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: findings.ai-operator.io
+spec:
+  group: ai-operator.io
+  scope: Namespaced          # all Findings live in the ai-operator namespace regardless of target
+  names:
+    kind: Finding
+    listKind: FindingList
+    plural: findings
+    singular: finding
+    shortNames: ["find"]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - { name: Category, type: string, jsonPath: .spec.category }
+        - { name: Severity, type: string, jsonPath: .spec.severity }
+        - { name: Target,   type: string, jsonPath: .spec.target.kind }
+        - { name: Name,     type: string, jsonPath: .spec.target.name }
+        - { name: Phase,    type: string, jsonPath: .status.phase }
+        - { name: By,       type: string, jsonPath: .spec.detectedBy }
+        - { name: Age,      type: date,   jsonPath: .metadata.creationTimestamp }
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: ["spec"]
+          properties:
+            spec:
+              type: object
+              required: ["category", "severity", "summary", "detectedBy", "source"]
+              properties:
+                source:
+                  type: string
+                  enum: ["git", "cluster"]
+                  description: Where it was found — a file in the repo, or a live object.
+                filePath:
+                  type: string
+                  description: Repo-relative path (source=git).
+                target:
+                  type: object
+                  description: The Kubernetes object the finding concerns.
+                  properties:
+                    apiVersion: { type: string }
+                    kind:       { type: string }
+                    name:       { type: string }
+                    namespace:  { type: string }
+                category:
+                  type: string
+                  enum:
+                    - security-leak        # secret/token/key in plain text
+                    - rbac-excess          # over-broad Role/ClusterRole
+                    - exposure             # port / host mount / missing NetworkPolicy
+                    - misconfig            # wrong/unsafe field value
+                    - missing-guardrail    # no probes / limits / PDB / quota
+                    - image-risk           # :latest, unpinned, disallowed registry
+                    - efficiency           # over/under-provisioned, waste
+                    - improvement          # best-practice gap, not yet harmful
+                severity:
+                  type: string
+                  enum: ["low", "medium", "high", "critical"]
+                summary:      { type: string, maxLength: 500 }
+                detail:       { type: string, maxLength: 8000 }
+                evidence:
+                  type: array
+                  items: { type: string, maxLength: 2000 }
+                detectedBy:   { type: string, description: "agent name" }
+                model:        { type: string, description: "Ollama model that produced it" }
+                suggestedFix:
+                  type: string
+                  maxLength: 8000
+                  description: Free-text hint from the detecting agent; the remediator produces the real patch.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: ["New", "Triaged", "InProgress", "Fixed", "Escalated", "AwaitingHuman", "Dismissed", "Failed"]
+                  default: "New"
+                priority:            { type: integer, description: "coordinator-assigned, 0=highest" }
+                confidence:          { type: number,  description: "0..1, coordinator" }
+                deduplicatedInto:    { type: string,  description: "name of the Finding this was merged into" }
+                remediationRef:      { type: string }
+                learningRef:         { type: string,  description: "memory row id" }
+                message:             { type: string }
+                lastTransitionTime:  { type: string, format: date-time }
+                observedGeneration:  { type: integer }

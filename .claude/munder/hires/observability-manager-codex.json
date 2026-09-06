@@ -1,0 +1,25 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "observability-manager-codex",
+  "description": "[codex fallback] Metrics/logs/traces/errors stack \u2014 Prometheus, Grafana, Loki, Datadog, Dynatrace, OpenTelemetry. Instrument before ship.",
+  "character": "pam",
+  "accent": "lilac",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for observability-manager. Own the metrics/logs/traces/errors stack \u2014 Prometheus, Grafana, Loki, OTel. Instrument every service before it ships.",
+  "capabilities": [
+    "metrics",
+    "logs",
+    "traces",
+    "prometheus",
+    "grafana",
+    "loki",
+    "datadog",
+    "otel",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

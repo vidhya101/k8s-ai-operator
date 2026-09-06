@@ -1,0 +1,22 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "linux-manager",
+  "description": "Linux host work \u2014 systemd units, resource-pressure debugging (CPU/mem/disk/IO/inodes), sysctl/kernel tuning, packages.",
+  "character": "stanley",
+  "accent": "peach",
+  "provider": "claude",
+  "goal": "Own Linux host work \u2014 systemd units, resource-pressure debugging, sysctl tuning, package/service management. Reproduce-then-fix.",
+  "capabilities": [
+    "linux",
+    "systemd",
+    "sysctl",
+    "kernel",
+    "package",
+    "service",
+    "cpu-mem-disk"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

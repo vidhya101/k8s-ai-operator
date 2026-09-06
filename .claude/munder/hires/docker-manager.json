@@ -1,0 +1,22 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "docker-manager",
+  "description": "Container images \u2014 multi-stage builds, hardening (non-root, cap drop), Trivy/Grype scans, SBOM, cosign. Distroless-first.",
+  "character": "kevin",
+  "accent": "sky",
+  "provider": "claude",
+  "goal": "Own container images \u2014 multi-stage builds, hardening (non-root, capability drop), Trivy/Grype scans, SBOM. Distroless-first.",
+  "capabilities": [
+    "docker",
+    "container",
+    "image",
+    "dockerfile",
+    "distroless",
+    "cve",
+    "sbom"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

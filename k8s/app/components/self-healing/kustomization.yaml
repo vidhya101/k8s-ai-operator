@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+# Self-healing layer. Only the always-safe piece is wired in here (the Reloader annotation, a
+# harmless no-op if the controller isn't installed). The other three are cluster-wide concerns
+# that belong in your platform/add-ons repo, NOT stamped per-app — they're shipped alongside as
+# reference manifests you apply once per cluster:
+#
+#   descheduler-policy.yaml   -> kube-system; rebalances pods off over-used/tainted/failed nodes.
+#                                Install: helm repo add descheduler https://kubernetes-sigs.github.io/descheduler
+#                                         helm install descheduler descheduler/descheduler -n kube-system \
+#                                           --set kind=CronJob --set schedule="*/15 * * * *"
+#
+#   keda-scaledobject.yaml    -> event-driven autoscaling / scale-to-zero (queue depth, Kafka lag,
+#                                cron, Prometheus query). Replaces the base CPU/mem HPA for
+#                                workloads whose load isn't CPU-correlated.
+#                                Install: helm install keda kedacore/keda -n keda --create-namespace
+#
+#   kyverno-guardrails.yaml   -> ClusterPolicies that keep every future workload self-healing by
+#                                construction: inject a PDB if missing, require probes, require
+#                                resource limits, block :latest, require a non-default PriorityClass
+#                                on the prod namespace.
+#                                Install: helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+#
+# Prereq for the wired-in part:
+#   Stakater Reloader — helm install reloader stakater/reloader -n reloader --create-namespace
+patches:
+  - path: deployment-reloader-patch.yaml
+    target:
+      kind: Deployment
+      name: app

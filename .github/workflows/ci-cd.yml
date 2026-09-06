@@ -1,0 +1,71 @@
+name: CI/CD
+
+# The one workflow every consuming repository needs. It carries no pipeline logic itself — it
+# just points the reusable workflow at this repo's config. Two ways to configure it:
+#
+#   1. Repo/Org "Variables" (Settings -> Secrets and variables -> Actions -> Variables) —
+#      CLOUD_PROVIDER, APP_NAME, IMAGE_NAME, AWS_REGION, AWS_ACCOUNT_ID, EKS_CLUSTER_NAME, etc.
+#      This is the "set once, every push just works" path.
+#   2. Manual "Run workflow" dispatch — pick cloud/language/environment from the Actions UI
+#      dropdown for a one-off run (e.g. testing a migration from GKE to EKS). Dispatch inputs
+#      win over repo variables when both are given.
+#
+# LANGUAGE is left empty by default on purpose — detect-stack auto-detects it from the repo's own
+# manifest files, so this file rarely needs a per-repo edit at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Target cloud (blank = use the CLOUD_PROVIDER repo variable)"
+        type: choice
+        options: ["", aws, gcp, azure, local]
+        default: ""
+      language:
+        description: "Language override (blank = auto-detect)"
+        type: choice
+        options: ["", python, node, react, java, go]
+        default: ""
+      environment:
+        description: "Target environment (blank = use the DEFAULT_ENVIRONMENT repo variable)"
+        type: string
+        default: ""
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pipeline:
+    uses: ./.github/workflows/reusable-ci-cd.yml
+    with:
+      cloud: ${{ inputs.cloud != '' && inputs.cloud || vars.CLOUD_PROVIDER }}
+      language: ${{ inputs.language }}
+      environment: ${{ inputs.environment != '' && inputs.environment || vars.DEFAULT_ENVIRONMENT || 'dev' }}
+      app-name: ${{ vars.APP_NAME }}
+      image-name: ${{ vars.IMAGE_NAME }}
+      # Skip the deploy stage on pull requests — build/scan/sign only, until it's merged.
+      deploy: ${{ github.event_name != 'pull_request' }}
+
+      aws-region: ${{ vars.AWS_REGION }}
+      aws-account-id: ${{ vars.AWS_ACCOUNT_ID }}
+      aws-role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+      eks-cluster-name: ${{ vars.EKS_CLUSTER_NAME }}
+
+      gcp-region: ${{ vars.GCP_REGION }}
+      gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
+      gcp-workload-identity-provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      gcp-service-account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      gke-cluster-name: ${{ vars.GKE_CLUSTER_NAME }}
+
+      azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+      azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      azure-acr-name: ${{ vars.AZURE_ACR_NAME }}
+      aks-resource-group: ${{ vars.AKS_RESOURCE_GROUP }}
+      aks-cluster-name: ${{ vars.AKS_CLUSTER_NAME }}
+    secrets:
+      KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG_CONTENT }}

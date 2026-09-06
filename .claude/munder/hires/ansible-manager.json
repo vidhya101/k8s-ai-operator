@@ -1,0 +1,21 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "ansible-manager",
+  "description": "Ansible config management \u2014 playbooks, roles, idempotency, static + dynamic inventory, Ansible Vault, molecule tests.",
+  "character": "phyllis",
+  "accent": "lilac",
+  "provider": "claude",
+  "goal": "Own Ansible \u2014 playbooks, roles, idempotency, Vault, inventory (static + dynamic). Every play converges cleanly on re-run.",
+  "capabilities": [
+    "ansible",
+    "playbook",
+    "role",
+    "vault",
+    "idempotency",
+    "inventory"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

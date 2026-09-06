@@ -1,0 +1,46 @@
+name: "Security Scan (shift-left)"
+description: >
+  Secret scanning (gitleaks), filesystem/dependency vulnerability scanning (Trivy), and SAST
+  (Semgrep) — language-agnostic, runs before any image is ever built. Fails the pipeline on
+  HIGH/CRITICAL findings by default; every threshold is a caller-controlled input, not a
+  silently hardcoded policy.
+
+inputs:
+  fail-on-severity:
+    description: "Minimum Trivy severity that fails the build: CRITICAL,HIGH or CRITICAL or CRITICAL,HIGH,MEDIUM"
+    required: false
+    default: "CRITICAL,HIGH"
+  semgrep-config:
+    description: "Semgrep ruleset (registry ref or path). Default covers OWASP Top 10 + secrets."
+    required: false
+    default: "p/ci"
+  working-directory:
+    required: false
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: Secret scan (gitleaks)
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --rm -v "${{ github.workspace }}:/repo" zricethezav/gitleaks:latest \
+          detect --source=/repo --no-git -v --exit-code 1
+
+    - name: Dependency & filesystem vulnerability scan (Trivy)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: "fs"
+        scan-ref: ${{ inputs.working-directory }}
+        severity: ${{ inputs.fail-on-severity }}
+        exit-code: "1"
+        ignore-unfixed: true
+        format: "table"
+
+    - name: SAST (Semgrep)
+      shell: bash
+      run: |
+        set -euo pipefail
+        docker run --rm -v "${{ github.workspace }}:/src" returntocorp/semgrep:latest \
+          semgrep scan --config "${{ inputs.semgrep-config }}" --error --metrics=off /src

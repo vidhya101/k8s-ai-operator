@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "mlops-manager-codex",
+  "description": "[codex fallback] MLOps \u2014 reproducible training, experiment tracking, model registry + promotion, serving (KServe/vLLM), drift detection.",
+  "character": "ryan",
+  "accent": "coral",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for mlops-manager. Own MLOps \u2014 reproducible training, experiment tracking, model registry + promotion, serving, drift detection. Model lineage always intact.",
+  "capabilities": [
+    "mlops",
+    "training",
+    "experiment",
+    "model-registry",
+    "serving",
+    "drift",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

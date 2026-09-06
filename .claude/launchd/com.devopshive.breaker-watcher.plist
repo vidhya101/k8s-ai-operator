@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Runs breaker-watcher.py at login and every 60 seconds as a daemon loop.
+  Fires macOS notifications when it detects circuit-breaker signals in any
+  Munder-hive agent's memory.md.
+
+  Nice=5 (higher priority than the memory sync — this is user-facing) but
+  polling is cheap (skips agents whose memory.md hasn't changed since last tick).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.devopshive.breaker-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/vidhyashankergoel/claude-imp/claude/.claude/scripts/breaker-watcher.py</string>
+        <string>--once</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Every 60 seconds. --once mode exits after one sweep so launchd re-runs cleanly. -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-breaker.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vidhyashankergoel/.local/state/devops-hive-breaker.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/vidhyashankergoel</string>
+    </dict>
+</dict>
+</plist>

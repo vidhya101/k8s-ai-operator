@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# The in-cluster autonomous remediation stack. Deploy once, authorize once (via the scoped RBAC),
+# then it runs with no per-action approval — because it physically cannot do anything destructive.
+#
+# PREREQUISITES (apply fails without them):
+#   - Kyverno            (kyverno.io/ClusterPolicy — used by rbac.yaml + rightsize.yaml)
+#   - VPA                (autoscaling.k8s.io/VerticalPodAutoscaler — rightsize.yaml)
+#   - the operators in k8s/platform (NodeHealthCheck, Descheduler, etc.) do the fast path;
+#     this stack is the long tail + right-sizing.
+#
+# Order:  kubectl apply -k k8s/platform          # detection + prevention + node recovery
+#         kubectl apply -k k8s/platform/autopilot # THEN this
+#
+# Kill switch:  kubectl -n platform-system patch cm autopilot-config --type merge -p '{"data":{"paused":"true"}}'
+# Dry run:      same with {"data":{"dryRun":"true"}}
+
+resources:
+  - rbac.yaml
+  - rightsize.yaml
+  - remediation-runner.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: platform
+      app.kubernetes.io/component: autopilot

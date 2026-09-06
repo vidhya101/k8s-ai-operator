@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "github-manager-codex",
+  "description": "[codex fallback] GitHub platform \u2014 repos, branch protection, CODEOWNERS, PR workflow, Actions, Dependabot, secret & code scanning.",
+  "character": "andy",
+  "accent": "sky",
+  "provider": "codex",
+  "goal": "CODEX FALLBACK for github-manager. Own GitHub \u2014 repos, branch protection, CODEOWNERS, Actions workflows, Dependabot/secret scanning. Left-shift security in the repo.",
+  "capabilities": [
+    "github",
+    "repo",
+    "branch-protection",
+    "codeowners",
+    "actions",
+    "dependabot",
+    "fallback",
+    "codex"
+  ],
+  "isolate": false,
+  "tokenCap": 250000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-fallback-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

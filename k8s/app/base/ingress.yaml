@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/name: app
+    app.kubernetes.io/part-of: platform
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod   # no-op if cert-manager isn't installed; remove if TLS is terminated upstream (cloud LB)
+spec:
+  ingressClassName: ingress-class-placeholder   # overlay sets: alb (aws) | gce (gcp) | azure-application-gateway (azure) | nginx (local)
+  tls:
+    - hosts: ["app.example.com"]                # overlay sets the real hostname per environment
+      secretName: app-tls
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app
+                port:
+                  name: http

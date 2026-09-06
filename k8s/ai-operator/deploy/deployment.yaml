@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-operator
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+spec:
+  replicas: 1                    # single active instance; scale >1 => kopf leader election kicks in
+  revisionHistoryLimit: 3
+  strategy: { type: Recreate }   # RWO PVC — don't run two pods mounting it at once
+  selector:
+    matchLabels: { app.kubernetes.io/name: ai-operator }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ai-operator }
+      annotations:
+        reloader.stakater.com/auto: "true"   # roll on config/prompt change if Reloader is present
+    spec:
+      serviceAccountName: ai-operator
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: operator
+          image: IMAGE_PLACEHOLDER          # install.sh sets this (local build or your registry)
+          imagePullPolicy: IfNotPresent
+          command: ["kopf", "run", "--standalone", "--liveness=http://0.0.0.0:8080/healthz", "/app/src/operator.py"]
+          env:
+            - name: OLLAMA_HOST
+              value: "http://ollama.ai-operator.svc.cluster.local:11434"
+            - name: MEMORY_DB
+              value: "/memory/agent.db"
+            - name: WORKSPACE
+              value: "/workspace"
+            - name: CONFIG_MAP
+              value: "ai-operator-config"
+            - name: SCAN_INTERVAL
+              value: "900"                    # kopf timer cadence; the sweep re-reads the ConfigMap each run
+            - name: PYTHONPATH
+              value: "/app/src"
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: GIT_REPO_URL
+              valueFrom: { secretKeyRef: { name: ai-operator-git, key: repoURL, optional: true } }
+            - name: GIT_TOKEN
+              valueFrom: { secretKeyRef: { name: ai-operator-git, key: token, optional: true } }
+            - name: GIT_AUTHOR
+              value: "ai-operator <ai-operator@noreply>"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          ports:
+            - { name: health, containerPort: 8080 }
+          startupProbe:
+            httpGet: { path: /healthz, port: health }
+            failureThreshold: 30
+            periodSeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 15
+            failureThreshold: 4
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits:   { cpu: "1",  memory: 1Gi }
+          volumeMounts:
+            - { name: memory, mountPath: /memory }
+            - { name: workspace, mountPath: /workspace }
+            - { name: tmp, mountPath: /tmp }
+            - { name: prompts, mountPath: /app/config/prompts }
+            - { name: agents, mountPath: /app/config/agents.yaml, subPath: agents.yaml }
+      volumes:
+        - { name: memory, persistentVolumeClaim: { claimName: ai-operator-memory } }
+        - { name: workspace, emptyDir: { sizeLimit: 2Gi } }   # git clone target
+        - { name: tmp, emptyDir: {} }
+        - { name: prompts, configMap: { name: ai-operator-prompts } }
+        - { name: agents, configMap: { name: ai-operator-agents } }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ai-operator
+  namespace: ai-operator
+spec:
+  minAvailable: 0        # single-replica maintenance workload; don't block node drains for it
+  selector:
+    matchLabels: { app.kubernetes.io/name: ai-operator }

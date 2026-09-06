@@ -1,0 +1,79 @@
+{
+  "spec": "munder-difflin/hire-gallery@1",
+  "author": "vidhya \u00b7 .claude/ DevOps team",
+  "description": "12 domain-manager hires for a DevOps/SRE/Platform Engineering hive.",
+  "agents": [
+    {
+      "name": "cloud-manager",
+      "character": "jim",
+      "file": "hires/cloud-manager.json",
+      "goal": "Own AWS/Azure/GCP architecture and cost \u2014 landing zones, IAM boundaries, budgets. Free-tier-first; hard $50 CAD/month ceiling."
+    },
+    {
+      "name": "observability-manager",
+      "character": "pam",
+      "file": "hires/observability-manager.json",
+      "goal": "Own the metrics/logs/traces/errors stack \u2014 Prometheus, Grafana, Loki, OTel. Instrument every service before it ships."
+    },
+    {
+      "name": "sre-manager",
+      "character": "dwight",
+      "file": "hires/sre-manager.json",
+      "goal": "Own SLIs/SLOs/error budgets, on-call, incident response, chaos testing. Every service ships with an SLO and a runbook."
+    },
+    {
+      "name": "cicd-manager",
+      "character": "oscar",
+      "file": "hires/cicd-manager.json",
+      "goal": "Own CI/CD pipeline design \u2014 gate placement (SAST/SCA/image/IaC scan), promotion, immutable artifacts. No manual deploys."
+    },
+    {
+      "name": "terraform-manager",
+      "character": "angela",
+      "file": "hires/terraform-manager.json",
+      "goal": "Own Terraform IaC \u2014 modules, state (backend + locking), plan review, Checkov/tfsec gate. Never apply without explicit sign-off."
+    },
+    {
+      "name": "linux-manager",
+      "character": "stanley",
+      "file": "hires/linux-manager.json",
+      "goal": "Own Linux host work \u2014 systemd units, resource-pressure debugging, sysctl tuning, package/service management. Reproduce-then-fix."
+    },
+    {
+      "name": "docker-manager",
+      "character": "kevin",
+      "file": "hires/docker-manager.json",
+      "goal": "Own container images \u2014 multi-stage builds, hardening (non-root, capability drop), Trivy/Grype scans, SBOM. Distroless-first."
+    },
+    {
+      "name": "github-manager",
+      "character": "andy",
+      "file": "hires/github-manager.json",
+      "goal": "Own GitHub \u2014 repos, branch protection, CODEOWNERS, Actions workflows, Dependabot/secret scanning. Left-shift security in the repo."
+    },
+    {
+      "name": "ansible-manager",
+      "character": "phyllis",
+      "file": "hires/ansible-manager.json",
+      "goal": "Own Ansible \u2014 playbooks, roles, idempotency, Vault, inventory (static + dynamic). Every play converges cleanly on re-run."
+    },
+    {
+      "name": "aiops-manager",
+      "character": "kelly",
+      "file": "hires/aiops-manager.json",
+      "goal": "Own AIOps \u2014 anomaly detection over telemetry, alert noise reduction (grouping/dedup/inhibit), safe auto-remediation. No silent silencing."
+    },
+    {
+      "name": "mlops-manager",
+      "character": "ryan",
+      "file": "hires/mlops-manager.json",
+      "goal": "Own MLOps \u2014 reproducible training, experiment tracking, model registry + promotion, serving, drift detection. Model lineage always intact."
+    },
+    {
+      "name": "kubernetes-manager",
+      "character": "creed",
+      "file": "hires/kubernetes-manager.json",
+      "goal": "Own Kubernetes across all distros (EKS/AKS/GKE/OpenShift/kubeadm/k3s/kind). Workload design, RBAC, network policy, admission control."
+    }
+  ]
+}

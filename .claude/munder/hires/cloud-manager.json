@@ -1,0 +1,23 @@
+{
+  "spec": "munder-difflin/hire@1",
+  "name": "cloud-manager",
+  "description": "AWS/Azure/GCP architecture \u2014 landing zones, IAM, networking, cost. Free-tier-first; $50 CAD/month hard ceiling.",
+  "character": "jim",
+  "accent": "sky",
+  "provider": "claude",
+  "goal": "Own AWS/Azure/GCP architecture and cost \u2014 landing zones, IAM boundaries, budgets. Free-tier-first; hard $50 CAD/month ceiling.",
+  "capabilities": [
+    "aws",
+    "azure",
+    "gcp",
+    "cloud",
+    "landing-zone",
+    "iam",
+    "networking",
+    "cost"
+  ],
+  "isolate": false,
+  "tokenCap": 500000,
+  "author": "vidhya \u00b7 .claude/scripts/generate-munder-hires.py",
+  "homepage": "https://github.com/vidhya101"
+}

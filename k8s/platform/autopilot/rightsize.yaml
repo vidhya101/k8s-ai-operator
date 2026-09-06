@@ -1,0 +1,104 @@
+# Automatic CPU/RAM right-sizing — the "add resources if needed, no manual intervention" part.
+#
+# Three layers, all autonomous once installed:
+#
+#   1. HPA (horizontal)  — already in k8s/app/base/hpa.yaml. Adds/removes REPLICAS on CPU/mem load.
+#   2. VPA (vertical)     — this file. Adjusts per-pod requests/limits from OBSERVED usage, so a
+#                           pod that actually needs 1Gi stops getting OOMKilled at 512Mi.
+#   3. Cluster Autoscaler / Karpenter — adds/removes NODES when pods can't fit. Install separately
+#                           (managed add-on on EKS/AKS/GKE; the autoscaler Helm chart on kubeadm).
+#
+# PREREQUISITES: VPA installed (vpa-recommender/updater/admission-controller) and Kyverno.
+#
+# SAFETY of VPA "Auto":
+#   - It evicts a pod to resize it. That's disruptive — so it is PDB-gated (k8s/app/base/pdb.yaml
+#     guarantees minAvailable), and only applied to workloads that opt IN with the label
+#     `autopilot.platform.io/rightsize: "true"`.
+#   - `maxAllowed` caps it so a runaway process can't get the VPA to request a whole node.
+#   - Do NOT let VPA "Auto" and the CPU/memory HPA target the SAME resource — they fight. The
+#     Kyverno policy below only creates a memory-only VPA, leaving CPU to the HPA. That's the one
+#     combination that is always safe.
+#   - On Kubernetes >= 1.33 with InPlacePodVerticalScaling enabled, VPA resizes without eviction —
+#     set updateMode "InPlaceOrRecreate" then (feature-gated; check your cluster first).
+---
+# Auto-generate a guarded, memory-only VPA for every opted-in Deployment. No per-workload YAML.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: autopilot-generate-vpa
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+spec:
+  rules:
+    - name: vpa-for-opted-in-deployments
+      match:
+        any:
+          - resources:
+              kinds: ["Deployment"]
+              selector:
+                matchLabels:
+                  autopilot.platform.io/rightsize: "true"
+      generate:
+        apiVersion: autoscaling.k8s.io/v1
+        kind: VerticalPodAutoscaler
+        name: "{{ request.object.metadata.name }}-autopilot"
+        namespace: "{{ request.object.metadata.namespace }}"
+        synchronize: true
+        data:
+          metadata:
+            labels:
+              app.kubernetes.io/managed-by: autopilot
+          spec:
+            targetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: "{{ request.object.metadata.name }}"
+            updatePolicy:
+              updateMode: "Auto"            # evict+resize; PDB-gated. "Initial" for eviction-free but slower.
+              minReplicas: 2                 # never let VPA take a workload below 2 while resizing
+            resourcePolicy:
+              containerPolicies:
+                - containerName: "*"
+                  controlledResources: ["memory"]   # memory only — CPU stays with the HPA
+                  controlledValues: RequestsAndLimits
+                  minAllowed: { memory: 64Mi }
+                  maxAllowed: { memory: 4Gi }        # EDIT per your node size / quota headroom
+---
+# For a workload that should scale VERTICALLY on CPU too (no CPU HPA on it), opt in with
+# `autopilot.platform.io/rightsize-cpu: "true"` instead — generates a cpu+memory VPA.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: autopilot-generate-vpa-full
+  labels: { app.kubernetes.io/part-of: platform, app.kubernetes.io/component: autopilot }
+spec:
+  rules:
+    - name: full-vpa-for-opted-in-deployments
+      match:
+        any:
+          - resources:
+              kinds: ["Deployment"]
+              selector:
+                matchLabels:
+                  autopilot.platform.io/rightsize-cpu: "true"
+      generate:
+        apiVersion: autoscaling.k8s.io/v1
+        kind: VerticalPodAutoscaler
+        name: "{{ request.object.metadata.name }}-autopilot-full"
+        namespace: "{{ request.object.metadata.namespace }}"
+        synchronize: true
+        data:
+          spec:
+            targetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: "{{ request.object.metadata.name }}"
+            updatePolicy:
+              updateMode: "Auto"
+              minReplicas: 2
+            resourcePolicy:
+              containerPolicies:
+                - containerName: "*"
+                  controlledResources: ["cpu", "memory"]
+                  controlledValues: RequestsAndLimits
+                  minAllowed: { cpu: 25m, memory: 64Mi }
+                  maxAllowed: { cpu: "4", memory: 8Gi }

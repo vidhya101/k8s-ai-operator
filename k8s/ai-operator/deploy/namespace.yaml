@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-operator
+  labels:
+    app.kubernetes.io/name: ai-operator
+    # The operator's own pods must satisfy PSA restricted (deployment.yaml does).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    # This namespace opts itself out of the operator's own remediation (no self-modification).
+    ai-operator.io/policy: manual

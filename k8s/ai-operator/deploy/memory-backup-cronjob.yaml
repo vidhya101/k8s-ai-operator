@@ -1,0 +1,50 @@
+# Off-cluster copy of the agentic memory. Adjust the target to your object store / NFS / repo.
+# Prefer Velero for the PVC if you already run it; this is the zero-dependency fallback.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ai-operator-memory-backup
+  namespace: ai-operator
+  labels: { app.kubernetes.io/name: ai-operator }
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 600
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            fsGroup: 65532
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: backup
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  # SQLite-consistent copy
+                  apk add --no-cache sqlite >/dev/null
+                  sqlite3 /memory/agent.db ".backup /tmp/agent-$TS.db"
+                  echo "backup /tmp/agent-$TS.db ($(stat -c%s /tmp/agent-$TS.db) bytes)"
+                  # TODO: ship /tmp/agent-$TS.db somewhere durable:
+                  #   aws s3 cp /tmp/agent-$TS.db s3://<bucket>/ai-operator/   (add creds Secret + awscli)
+                  #   or: mc cp, rclone, scp to an NFS mount, git commit to a data repo, ...
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              volumeMounts:
+                - { name: memory, mountPath: /memory, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - { name: memory, persistentVolumeClaim: { claimName: ai-operator-memory } }
+            - { name: tmp, emptyDir: {} }

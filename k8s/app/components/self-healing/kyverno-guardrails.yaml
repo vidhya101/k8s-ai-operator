@@ -1,0 +1,121 @@
+# REFERENCE — apply once per cluster (needs Kyverno installed). Not per-app. These ClusterPolicies
+# keep EVERY future workload self-healing / well-formed by construction, so a hand-rolled manifest
+# that skipped a probe or a PDB doesn't silently become a fragile production service.
+#
+# Start every policy in `Audit` (logs violations, blocks nothing). Move to `Enforce` per policy
+# once the audit log is clean. `background: true` also flags already-running violators.
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-probes
+  annotations:
+    policies.kyverno.io/description: >-
+      Every container must define readiness + liveness probes — without them Kubernetes can't tell
+      a wedged pod from a healthy one and self-healing (restart / traffic-gating) doesn't work.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: readiness-and-liveness
+      match:
+        any:
+          - resources:
+              kinds: ["Deployment", "StatefulSet"]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system", "kube-node-lease"] }
+      validate:
+        message: "Containers must set readinessProbe and livenessProbe."
+        foreach:
+          - list: "request.object.spec.template.spec.containers[]"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.readinessProbe || '' }}"
+                    operator: Equals
+                    value: ""
+                  - key: "{{ element.livenessProbe || '' }}"
+                    operator: Equals
+                    value: ""
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: cpu-mem-requests-and-limits
+      match:
+        any:
+          - resources: { kinds: ["Pod"] }
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system"] }
+      validate:
+        message: "Every container needs resources.requests and resources.limits for cpu and memory."
+        foreach:
+          - list: "request.object.spec.containers[]"
+            pattern:
+              resources:
+                requests: { memory: "?*", cpu: "?*" }
+                limits: { memory: "?*", cpu: "?*" }
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-digest-or-explicit-tag
+      match:
+        any:
+          - resources: { kinds: ["Pod"] }
+      validate:
+        message: "Images must be digest-pinned or use an explicit non-latest tag."
+        foreach:
+          - list: "request.object.spec.containers[]"
+            deny:
+              conditions:
+                any:
+                  - key: "{{ element.image }}"
+                    operator: AnyIn
+                    value: ["*:latest", "*:latest@*"]
+                  - key: "{{ element.image }}"
+                    operator: NotEquals
+                    value: "*@sha256:*"
+                    # AND has no ":" tag segment -> treat as :latest implicitly
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: autogen-pdb
+  annotations:
+    policies.kyverno.io/description: >-
+      Generate a default PodDisruptionBudget (minAvailable 1) for any Deployment that doesn't have
+      one, so node drains / cluster upgrades can't take a service fully down.
+spec:
+  rules:
+    - name: generate-pdb
+      match:
+        any:
+          - resources:
+              kinds: ["Deployment"]
+      exclude:
+        any:
+          - resources: { namespaces: ["kube-system"] }
+      generate:
+        apiVersion: policy/v1
+        kind: PodDisruptionBudget
+        name: "{{ request.object.metadata.name }}"
+        namespace: "{{ request.object.metadata.namespace }}"
+        synchronize: true
+        data:
+          spec:
+            minAvailable: 1
+            selector:
+              matchLabels: "{{ request.object.spec.selector.matchLabels }}"
