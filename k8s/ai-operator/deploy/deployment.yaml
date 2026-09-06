@@ -1,3 +1,6 @@
+# No custom image. The operator runs on the public python:3.12-slim image; three initContainers
+# get it ready (tools -> code -> deps). This removes the docker build, the registry, the push, and
+# the pull secret from the install path entirely.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -5,16 +8,16 @@ metadata:
   namespace: ai-operator
   labels: { app.kubernetes.io/name: ai-operator }
 spec:
-  replicas: 1                    # single active instance; scale >1 => kopf leader election kicks in
+  replicas: 1
   revisionHistoryLimit: 3
-  strategy: { type: Recreate }   # RWO PVC — don't run two pods mounting it at once
+  strategy: { type: Recreate }          # RWO PVC
   selector:
     matchLabels: { app.kubernetes.io/name: ai-operator }
   template:
     metadata:
       labels: { app.kubernetes.io/name: ai-operator }
       annotations:
-        reloader.stakater.com/auto: "true"   # roll on config/prompt change if Reloader is present
+        reloader.stakater.com/auto: "true"
     spec:
       serviceAccountName: ai-operator
       terminationGracePeriodSeconds: 30
@@ -24,41 +27,93 @@ spec:
         runAsGroup: 65532
         fsGroup: 65532
         seccompProfile: { type: RuntimeDefault }
-      containers:
-        - name: operator
-          image: IMAGE_PLACEHOLDER          # install.sh sets this (local build or your registry)
-          imagePullPolicy: IfNotPresent
-          command: ["kopf", "run", "--standalone", "--liveness=http://0.0.0.0:8080/healthz", "/app/src/operator.py"]
+
+      initContainers:
+        # 1. kubectl + helm into a shared dir on PATH (Alpine + apk curl — fast, no apt)
+        - name: tools
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              cd /tools
+              case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
+              apk add --no-cache curl tar >/dev/null
+              echo "fetching kubectl + helm for linux/$A"
+              curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$A/kubectl"
+              curl -fsSL "https://get.helm.sh/helm-v3.16.3-linux-$A.tar.gz" | tar xz --strip-components=1 "linux-$A/helm"
+              chmod +x kubectl helm
+              ./kubectl version --client=true && ./helm version --short
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            runAsUser: 0                 # apk; the output is just static binaries the main container runs as non-root
+          volumeMounts: [{ name: tools, mountPath: /tools }]
+
+        # 2. the operator code (public repo -> no auth). GIT_REPO_URL/GIT_REF override the defaults.
+        - name: code
+          image: alpine/git:2.45.2
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              REPO="${SRC_REPO:-https://github.com/vidhya101/k8s-ai-operator.git}"
+              REF="${SRC_REF:-main}"
+              echo "cloning $REPO@$REF"
+              rm -rf /code/* /code/.[!.]* 2>/dev/null || true
+              git clone --depth 1 --branch "$REF" "$REPO" /code
           env:
-            - name: OLLAMA_HOST
-              value: "http://ollama.ai-operator.svc.cluster.local:11434"
-            - name: MEMORY_DB
-              value: "/memory/agent.db"
-            - name: WORKSPACE
-              value: "/workspace"
-            - name: CONFIG_MAP
-              value: "ai-operator-config"
-            - name: SCAN_INTERVAL
-              value: "900"                    # kopf timer cadence; the sweep re-reads the ConfigMap each run
-            - name: PYTHONPATH
-              value: "/app/src"
-            - name: POD_NAMESPACE
-              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-            - name: GIT_REPO_URL
-              valueFrom: { secretKeyRef: { name: ai-operator-git, key: repoURL, optional: true } }
-            - name: GIT_TOKEN
-              valueFrom: { secretKeyRef: { name: ai-operator-git, key: token, optional: true } }
-            - name: GIT_AUTHOR
-              value: "ai-operator <ai-operator@noreply>"
+            - { name: SRC_REPO, valueFrom: { configMapKeyRef: { name: ai-operator-config, key: srcRepo, optional: true } } }
+            - { name: SRC_REF,  valueFrom: { configMapKeyRef: { name: ai-operator-config, key: srcRef,  optional: true } } }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
-          ports:
-            - { name: health, containerPort: 8080 }
+          volumeMounts: [{ name: code, mountPath: /code }]
+
+        # 3. python deps into a shared dir
+        - name: deps
+          image: python:3.12-slim
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              pip install --no-cache-dir --target=/deps -r /code/k8s/ai-operator/requirements.txt
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            runAsUser: 0
+          volumeMounts:
+            - { name: code, mountPath: /code }
+            - { name: deps, mountPath: /deps }
+
+      containers:
+        - name: operator
+          image: python:3.12-slim
+          command: ["python", "-m", "kopf", "run", "--standalone",
+                    "--liveness=http://0.0.0.0:8080/healthz",
+                    "/code/k8s/ai-operator/src/operator.py"]
+          env:
+            - { name: PATH, value: "/tools:/usr/local/bin:/usr/bin:/bin" }
+            - { name: PYTHONPATH, value: "/deps:/code/k8s/ai-operator/src" }
+            - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: HOME, value: "/tmp" }
+            - { name: OLLAMA_HOST, value: "http://ollama.ai-operator.svc.cluster.local:11434" }
+            - { name: MEMORY_DB, value: "/memory/agent.db" }
+            - { name: WORKSPACE, value: "/workspace" }
+            - { name: CONFIG_MAP, value: "ai-operator-config" }
+            - { name: SCAN_INTERVAL, value: "900" }
+            - { name: POD_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: GIT_REPO_URL, valueFrom: { secretKeyRef: { name: ai-operator-git, key: repoURL, optional: true } } }
+            - { name: GIT_TOKEN,    valueFrom: { secretKeyRef: { name: ai-operator-git, key: token,   optional: true } } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          ports: [{ name: health, containerPort: 8080 }]
           startupProbe:
             httpGet: { path: /healthz, port: health }
-            failureThreshold: 30
+            failureThreshold: 40
             periodSeconds: 3
           livenessProbe:
             httpGet: { path: /healthz, port: health }
@@ -68,20 +123,22 @@ spec:
             httpGet: { path: /healthz, port: health }
             periodSeconds: 10
           resources:
-            requests: { cpu: 200m, memory: 512Mi }
-            limits:   { cpu: "1",  memory: 1Gi }
+            requests: { cpu: 150m, memory: 384Mi }
+            limits:   { cpu: "1",  memory: 768Mi }
           volumeMounts:
             - { name: memory, mountPath: /memory }
+            - { name: code, mountPath: /code }
+            - { name: deps, mountPath: /deps }
+            - { name: tools, mountPath: /tools }
             - { name: workspace, mountPath: /workspace }
             - { name: tmp, mountPath: /tmp }
-            - { name: prompts, mountPath: /app/config/prompts }
-            - { name: agents, mountPath: /app/config/agents.yaml, subPath: agents.yaml }
       volumes:
         - { name: memory, persistentVolumeClaim: { claimName: ai-operator-memory } }
-        - { name: workspace, emptyDir: { sizeLimit: 2Gi } }   # git clone target
+        - { name: code, emptyDir: { sizeLimit: 200Mi } }
+        - { name: deps, emptyDir: { sizeLimit: 512Mi } }
+        - { name: tools, emptyDir: { sizeLimit: 128Mi } }
+        - { name: workspace, emptyDir: { sizeLimit: 2Gi } }
         - { name: tmp, emptyDir: {} }
-        - { name: prompts, configMap: { name: ai-operator-prompts } }
-        - { name: agents, configMap: { name: ai-operator-agents } }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -89,6 +146,6 @@ metadata:
   name: ai-operator
   namespace: ai-operator
 spec:
-  minAvailable: 0        # single-replica maintenance workload; don't block node drains for it
+  minAvailable: 0
   selector:
     matchLabels: { app.kubernetes.io/name: ai-operator }

@@ -1,12 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Root kustomization so configMapGenerator can reach config/ without escaping the kustomize dir.
-# install.sh renders this (after substituting IMAGE / OLLAMA_IP / MODE into deploy/*.yaml) with:
-#     kubectl apply -f crds/            # CRDs first
-#     kubectl apply -k .                # then this
+# Everything the operator needs, minus Kyverno (install.sh applies deploy/kyverno-guardrails.yaml
+# only when Kyverno is present) and minus the in-cluster Ollama when OLLAMA_EXTERNAL_URL is set.
+# No image build, no configMapGenerator, no placeholders — the operator pod clones this repo at
+# startup and runs from it.
 #
-# Prereqs the CRDs / policies need: Kyverno (kyverno.io/ClusterPolicy). install.sh installs it.
+#     kubectl apply -f crds/
+#     kubectl apply -k .
 
 namespace: ai-operator
 
@@ -19,21 +20,6 @@ resources:
   - deploy/config.yaml
   - deploy/deployment.yaml
   - deploy/memory-backup-cronjob.yaml
-
-configMapGenerator:
-  - name: ai-operator-prompts
-    files:
-      - config/prompts/coordinator.md
-      - config/prompts/scanner.md
-      - config/prompts/security.md
-      - config/prompts/remediator.md
-      - config/prompts/gitops.md
-  - name: ai-operator-agents
-    files:
-      - agents.yaml=config/agents.yaml
-
-generatorOptions:
-  disableNameSuffixHash: true
 
 labels:
   - pairs:

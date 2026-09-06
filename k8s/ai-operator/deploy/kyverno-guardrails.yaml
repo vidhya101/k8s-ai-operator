@@ -1,0 +1,107 @@
+# Kyverno backstop for the ai-operator SA — applied by install.sh ONLY when Kyverno is
+# present. The operator is still safe without it (RBAC has no destructive verbs, and
+# src/kube_safe.py refuses data-losing changes) — this is defence in depth.
+#
+# Requires: Kyverno installed (kyverno.io/ClusterPolicy).
+# ================================================================================================
+# Kyverno backstop — enforced regardless of what the ClusterRole says. Requires Kyverno installed.
+# ================================================================================================
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: ai-operator-guardrails
+  labels: { app.kubernetes.io/name: ai-operator }
+spec:
+  validationFailureAction: Enforce
+  background: false
+  rules:
+    # 1. The operator SA may never DELETE a protected resource, even if RBAC is later widened.
+    - name: no-destructive-verbs
+      match:
+        any:
+          - resources:
+              kinds:
+                - Deployment
+                - StatefulSet
+                - DaemonSet
+                - ReplicaSet
+                - Service
+                - Ingress
+                - PersistentVolumeClaim
+                - PersistentVolume
+                - Namespace
+                - Node
+                - CustomResourceDefinition
+                - Secret
+                - Role
+                - ClusterRole
+                - RoleBinding
+                - ClusterRoleBinding
+                - ValidatingWebhookConfiguration
+                - MutatingWebhookConfiguration
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["DELETE"]
+      validate:
+        message: "ai-operator may not DELETE protected resources — it backs up and creates new. A human deletes."
+        deny: {}
+
+    # 2. The operator SA may not write to control-plane / system namespaces.
+    - name: stay-out-of-system-namespaces
+      match:
+        any:
+          - resources:
+              namespaces: ["kube-system", "kube-node-lease", "kube-public", "kube-apiserver"]
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["CREATE", "UPDATE", "DELETE"]
+      validate:
+        message: "ai-operator may not modify control-plane / system namespaces."
+        deny: {}
+
+    # 3. The operator SA may not write a non-Helm Secret (Helm release state only).
+    - name: helm-secrets-only
+      match:
+        any:
+          - resources: { kinds: ["Secret"] }
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.operation }}"
+            operator: AnyIn
+            value: ["CREATE", "UPDATE"]
+          - key: "{{ request.object.type || '' }}"
+            operator: NotEquals
+            value: "helm.sh/release.v1"
+      validate:
+        message: "ai-operator may only write Helm release Secrets, not application Secrets."
+        deny: {}
+
+    # 4. The operator SA may not grant itself or anyone cluster-admin.
+    - name: no-privilege-escalation
+      match:
+        any:
+          - resources: { kinds: ["ClusterRoleBinding", "RoleBinding"] }
+      preconditions:
+        all:
+          - key: "{{ request.userInfo.username }}"
+            operator: Equals
+            value: "system:serviceaccount:ai-operator:ai-operator"
+          - key: "{{ request.object.roleRef.name }}"
+            operator: AnyIn
+            value: ["cluster-admin", "admin", "edit"]
+      validate:
+        message: "ai-operator may not bind the built-in privileged roles."
+        deny: {}

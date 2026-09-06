@@ -3,6 +3,7 @@ live ConfigMap so you retune without a rebuild) + memory injection."""
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 from dataclasses import dataclass
 from typing import Any
@@ -14,8 +15,11 @@ from memory import Memory, Recall
 
 log = logging.getLogger("ai-operator.agents")
 
-PROMPT_DIR = pathlib.Path("/app/config/prompts")
-AGENTS_FILE = pathlib.Path("/app/config/agents.yaml")
+# The operator pod clones this repo to /code; prompts + agents.yaml live inside it. Override with
+# PROMPT_DIR / AGENTS_FILE if you mount them elsewhere.
+_CFG = pathlib.Path(os.environ.get("CONFIG_DIR", "/code/k8s/ai-operator/config"))
+PROMPT_DIR = pathlib.Path(os.environ.get("PROMPT_DIR", str(_CFG / "prompts")))
+AGENTS_FILE = pathlib.Path(os.environ.get("AGENTS_FILE", str(_CFG / "agents.yaml")))
 
 
 @dataclass

@@ -1,0 +1,12 @@
+# Throwaway local cluster for the ai-operator. `./install.sh --kind` creates it.
+# The extraMount lets the in-cluster Ollama reuse models you already downloaded on the host
+# (install.sh substitutes HOST_HOME).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: ai-operator
+nodes:
+  - role: control-plane
+    extraMounts:
+      - hostPath: HOST_HOME/.ollama
+        containerPath: /host-ollama
+        readOnly: false

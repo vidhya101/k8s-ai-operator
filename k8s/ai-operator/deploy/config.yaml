@@ -25,13 +25,18 @@ data:
   maxChangesClusterWidePer10Min: "8"
   requireHealthyControlPlane: "true"
   backupRetentionDays: "30"
-  # ----- models (override per agent; must exist in Ollama or pull-models.sh will fetch them) ----
+  # ----- where the operator pod pulls its own code from (initContainers) -----------------------
+  srcRepo: "https://github.com/vidhya101/k8s-ai-operator.git"
+  srcRef: "main"
+  # ----- models --------------------------------------------------------------------------------
+  # Defaults are all <=8B so in-cluster CPU Ollama is usable. For better quality, point
+  # OLLAMA_EXTERNAL_URL at a GPU Ollama (.env) and raise these to mixtral / codellama:13b.
   model.coordinator: "llama3:8b"
   model.scanner: "deepseek-coder:6.7b"
-  model.security: "mixtral:latest"
-  model.securityFallback: "llama3:latest"
-  model.remediator: "codellama:13b"
+  model.security: "llama3:8b"
+  model.securityFallback: "llama3:8b"
+  model.remediator: "codellama:7b"
   model.gitops: "llama3:8b"
   model.embedding: "nomic-embed-text"
-  ollamaTimeoutSeconds: "180"
-  ollamaMaxConcurrent: "2"           # keep low — big models are RAM-bound on a laptop
+  ollamaTimeoutSeconds: "300"        # CPU inference is slow; be patient
+  ollamaMaxConcurrent: "1"           # one model resident at a time on CPU
