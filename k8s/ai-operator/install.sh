@@ -138,19 +138,50 @@ fi
 # ---------------------------------------------------------------------------------------------------
 # 5. build + ship the image
 # ---------------------------------------------------------------------------------------------------
-IMAGE="${IMAGE_REPO:+$IMAGE_REPO:}ai-operator:${IMAGE_TAG}"
+SIDELOAD=""
+case "$DISTRO" in
+  kind|minikube|docker-desktop) SIDELOAD="$DISTRO";;
+esac
+if [ -z "${IMAGE_REPO:-}" ] && [ -z "$SIDELOAD" ]; then
+  cat <<EOF
+$(warn "This is a '$DISTRO' cluster — the image can't be side-loaded, and IMAGE_REPO is empty.")
+    Set IMAGE_REPO in .env to a registry your cluster nodes can pull from. Quickest (you already
+    have a GitHub token):
+
+      1) echo \$GIT_TOKEN | docker login ghcr.io -u $(gh api user -q .login 2>/dev/null || echo YOURNAME) --password-stdin
+      2) in .env:   IMAGE_REPO=ghcr.io/$(gh api user -q .login 2>/dev/null || echo yourname)/ai-operator
+      3) ./install.sh again   (it will push, and wire an imagePullSecret from GIT_TOKEN)
+
+    Or Docker Hub:  IMAGE_REPO=docker.io/<user>/ai-operator  after 'docker login'.
+EOF
+  die "no image destination"
+fi
+
+IMAGE="ai-operator:${IMAGE_TAG}"
 [ -n "${IMAGE_REPO:-}" ] && IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
-say "Building image: $IMAGE"
 BUILDER="$(have docker && echo docker || echo podman)"
-$BUILDER build -t "$IMAGE" --build-arg TARGETARCH="$ARCH" .
-if [ -n "${IMAGE_REPO:-}" ]; then
-  say "Pushing $IMAGE"; $BUILDER push "$IMAGE"
+# nodes ($ARCH from `kubectl get nodes` labels) — build for that arch. Same-arch (Mac arm64 ->
+# arm64 VMs) is the common case; override with IMAGE_PLATFORM=linux/amd64 in .env for cross-arch.
+NODE_ARCH="$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}' 2>/dev/null || echo "$ARCH")"
+PLATFORM="${IMAGE_PLATFORM:-linux/${NODE_ARCH}}"
+say "Building $IMAGE for $PLATFORM  (host: $ARCH, nodes: $NODE_ARCH)"
+if [ "$BUILDER" = docker ] && docker buildx version >/dev/null 2>&1; then
+  docker buildx build --platform "$PLATFORM" --build-arg TARGETARCH="${PLATFORM##*/}" \
+    -t "$IMAGE" --load .
 else
-  case "$DISTRO" in
+  [ "${PLATFORM##*/}" = "$ARCH" ] || warn "no buildx — building native $ARCH, but nodes are $NODE_ARCH (mismatch!)"
+  $BUILDER build --build-arg TARGETARCH="${PLATFORM##*/}" -t "$IMAGE" .
+fi
+
+if [ -n "${IMAGE_REPO:-}" ]; then
+  say "Pushing $IMAGE"
+  $BUILDER push "$IMAGE" || die "push failed — did you 'docker login ${IMAGE_REPO%%/*}' ?"
+else
+  say "Side-loading into $SIDELOAD"
+  case "$SIDELOAD" in
     kind)      kind load docker-image "$IMAGE" --name "${CTX#kind-}";;
     minikube)  minikube image load "$IMAGE";;
-    docker-desktop) : ;;  # shares the daemon
-    *) warn "no IMAGE_REPO set and distro '$DISTRO' can't side-load — set IMAGE_REPO in .env";;
+    docker-desktop) : ;;
   esac
 fi
 
@@ -174,8 +205,23 @@ if [ -n "${GIT_REPO_URL:-}" ]; then
     --dry-run=client -o yaml | kubectl apply -f -
 fi
 
+# private registry (GHCR/Docker Hub) -> pull secret from the token, attached to the operator SA
+PULL_SECRET=""
+if [ -n "${IMAGE_REPO:-}" ] && [ -n "${GIT_TOKEN:-}" ]; then
+  REG="${IMAGE_REPO%%/*}"
+  case "$REG" in ghcr.io) PULL_USER="$(gh api user -q .login 2>/dev/null || echo x)";; *) PULL_USER="${DOCKER_USER:-$REG}";; esac
+  kubectl -n ai-operator create secret docker-registry ai-operator-pull \
+    --docker-server="$REG" --docker-username="$PULL_USER" --docker-password="$GIT_TOKEN" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  PULL_SECRET="ai-operator-pull"
+fi
+
 say "Deploying"
 kubectl apply -k "$WORK/src"
+if [ -n "$PULL_SECRET" ]; then
+  kubectl -n ai-operator patch deployment ai-operator --type json \
+    -p "[{\"op\":\"add\",\"path\":\"/spec/template/spec/imagePullSecrets\",\"value\":[{\"name\":\"$PULL_SECRET\"}]}]"
+fi
 rm -rf "$WORK"
 
 say "Waiting for rollout"
