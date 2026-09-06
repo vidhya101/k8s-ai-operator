@@ -120,11 +120,19 @@ OLLAMA_HOST="$LOCAL_OLLAMA" bash scripts/pull-models.sh deploy/config.yaml
 # ---------------------------------------------------------------------------------------------------
 say "Cluster prerequisites"
 if ! kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
-  warn "Kyverno not installed — it enforces the 'cannot delete / cannot escalate' guardrails."
-  confirm "helm install Kyverno now?" || die "Kyverno is required for the safety guardrails"
+  warn "Kyverno not installed — it's the enforced backstop for 'cannot delete / cannot escalate'."
+  warn "(RBAC + the operator's own safe-apply checks still protect you without it.)"
+  confirm "helm install Kyverno now?" || die "the manifests include Kyverno ClusterPolicies — its CRDs are required"
   helm repo add kyverno https://kyverno.github.io/kyverno/ >/dev/null 2>&1 || true
   helm repo update >/dev/null
-  helm upgrade --install kyverno kyverno/kyverno -n kyverno --create-namespace --wait
+  # slow/loaded clusters take a while; a wait timeout is not a failure — the CRDs land immediately.
+  helm upgrade --install kyverno kyverno/kyverno -n kyverno --create-namespace \
+    --set admissionController.replicas=1 --set backgroundController.replicas=1 \
+    --set cleanupController.replicas=1 --set reportsController.replicas=1 \
+    --timeout 12m --wait \
+    || warn "Kyverno pods still coming up — continuing. Guardrail policies enforce once its pods are Ready (check: kubectl -n kyverno get pods)."
+  kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1 \
+    || die "Kyverno CRDs did not install — cannot apply the operator manifests. Retry: helm upgrade --install kyverno kyverno/kyverno -n kyverno --create-namespace"
 fi
 if ! kubectl top nodes >/dev/null 2>&1; then
   warn "metrics-server absent (efficiency findings need it)."
@@ -145,14 +153,28 @@ esac
 if [ -z "${IMAGE_REPO:-}" ] && [ -z "$SIDELOAD" ]; then
   cat <<EOF
 $(warn "This is a '$DISTRO' cluster — the image can't be side-loaded, and IMAGE_REPO is empty.")
-    Set IMAGE_REPO in .env to a registry your cluster nodes can pull from. Quickest (you already
-    have a GitHub token):
+    Set IMAGE_REPO in .env to a registry your nodes can pull from, then re-run.
 
-      1) echo \$GIT_TOKEN | docker login ghcr.io -u $(gh api user -q .login 2>/dev/null || echo YOURNAME) --password-stdin
+    DOCKER HUB (you have an account):
+      1) docker login                       # username + a Docker Hub access token
+      2) in .env:   IMAGE_REPO=docker.io/<your-dockerhub-username>/ai-operator
+                    REGISTRY_TOKEN=<that same Docker Hub token>   # omit if you make the repo public
+      3) ./install.sh
+
+    GHCR (needs a GitHub PAT with the 'write:packages' scope — your gh token does NOT have it):
+      1) echo <PAT> | docker login ghcr.io -u $(gh api user -q .login 2>/dev/null || echo YOURNAME) --password-stdin
       2) in .env:   IMAGE_REPO=ghcr.io/$(gh api user -q .login 2>/dev/null || echo yourname)/ai-operator
-      3) ./install.sh again   (it will push, and wire an imagePullSecret from GIT_TOKEN)
+                    REGISTRY_TOKEN=<PAT>
+      3) ./install.sh
 
-    Or Docker Hub:  IMAGE_REPO=docker.io/<user>/ai-operator  after 'docker login'.
+    NO REGISTRY (load onto each node's containerd via SSH — build for the nodes' arch):
+      docker build --build-arg TARGETARCH=$ARCH -t ai-operator:${IMAGE_TAG} .    # $ARCH = this host
+      docker save ai-operator:${IMAGE_TAG} -o /tmp/aiop.tar
+      for n in <node1> <node2> <node3>; do
+        scp /tmp/aiop.tar \$n:/tmp/ && ssh \$n 'sudo ctr -n k8s.io images import /tmp/aiop.tar'
+      done
+      then in .env:  IMAGE_REPO=   (blank)   and edit deploy/deployment.yaml image to
+      ai-operator:${IMAGE_TAG} with imagePullPolicy: IfNotPresent, then: kubectl apply -k .
 EOF
   die "no image destination"
 fi
@@ -205,15 +227,26 @@ if [ -n "${GIT_REPO_URL:-}" ]; then
     --dry-run=client -o yaml | kubectl apply -f -
 fi
 
-# private registry (GHCR/Docker Hub) -> pull secret from the token, attached to the operator SA
+# private registry -> pull secret from REGISTRY_TOKEN (or GIT_TOKEN for ghcr), attached to the pod.
+# Skip it if the repo/package is public. Username: from the IMAGE_REPO path for Docker Hub, from
+# `gh` for GHCR, or set REGISTRY_USER / REGISTRY_TOKEN in .env explicitly.
 PULL_SECRET=""
-if [ -n "${IMAGE_REPO:-}" ] && [ -n "${GIT_TOKEN:-}" ]; then
-  REG="${IMAGE_REPO%%/*}"
-  case "$REG" in ghcr.io) PULL_USER="$(gh api user -q .login 2>/dev/null || echo x)";; *) PULL_USER="${DOCKER_USER:-$REG}";; esac
+REG="${IMAGE_REPO%%/*}"
+REG_TOKEN="${REGISTRY_TOKEN:-}"
+case "$REG" in
+  ghcr.io)                  : "${REG_TOKEN:=${GIT_TOKEN:-}}"; REG_USER="${REGISTRY_USER:-$(gh api user -q .login 2>/dev/null || echo x)}";;
+  docker.io|index.docker.io|registry-1.docker.io|"") REG_USER="${REGISTRY_USER:-$(printf '%s' "$IMAGE_REPO" | awk -F/ '{print $2}')}";;
+  *)                        REG_USER="${REGISTRY_USER:-$REG}";;
+esac
+if [ -n "${IMAGE_REPO:-}" ] && [ -n "$REG_TOKEN" ]; then
   kubectl -n ai-operator create secret docker-registry ai-operator-pull \
-    --docker-server="$REG" --docker-username="$PULL_USER" --docker-password="$GIT_TOKEN" \
-    --dry-run=client -o yaml | kubectl apply -f -
+    --docker-server="${REG:-https://index.docker.io/v1/}" --docker-username="$REG_USER" \
+    --docker-password="$REG_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
   PULL_SECRET="ai-operator-pull"
+  say "pull secret ai-operator-pull created ($REG as $REG_USER)"
+elif [ -n "${IMAGE_REPO:-}" ]; then
+  warn "no REGISTRY_TOKEN — assuming $IMAGE_REPO is PUBLIC. If pods hit ImagePullBackOff, set"
+  warn "REGISTRY_TOKEN (+ REGISTRY_USER) in .env and re-run, or make the repo/package public."
 fi
 
 say "Deploying"
