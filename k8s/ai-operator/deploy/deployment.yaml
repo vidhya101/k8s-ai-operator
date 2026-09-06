@@ -28,8 +28,9 @@ spec:
         fsGroup: 65532
         seccompProfile: { type: RuntimeDefault }
 
+      # All init containers run as the same non-root uid as the operator (PodSecurity "restricted").
       initContainers:
-        # 1. kubectl + helm into a shared dir on PATH (Alpine + apk curl — fast, no apt)
+        # 1. kubectl + helm into a shared dir on PATH. busybox wget/tar in base alpine — no apk, no root.
         - name: tools
           image: alpine:3.20
           command: ["/bin/sh", "-c"]
@@ -38,19 +39,19 @@ spec:
               set -e
               cd /tools
               case "$(uname -m)" in aarch64|arm64) A=arm64;; *) A=amd64;; esac
-              apk add --no-cache curl tar >/dev/null
               echo "fetching kubectl + helm for linux/$A"
-              curl -fsSLo kubectl "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/$A/kubectl"
-              curl -fsSL "https://get.helm.sh/helm-v3.16.3-linux-$A.tar.gz" | tar xz --strip-components=1 "linux-$A/helm"
+              KV="$(wget -qO- https://dl.k8s.io/release/stable.txt)"
+              wget -qO kubectl "https://dl.k8s.io/release/$KV/bin/linux/$A/kubectl"
+              wget -qO helm.tgz "https://get.helm.sh/helm-v3.16.3-linux-$A.tar.gz"
+              tar xzf helm.tgz --strip-components=1 "linux-$A/helm" && rm helm.tgz
               chmod +x kubectl helm
               ./kubectl version --client=true && ./helm version --short
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-            runAsUser: 0                 # apk; the output is just static binaries the main container runs as non-root
           volumeMounts: [{ name: tools, mountPath: /tools }]
 
-        # 2. the operator code (public repo -> no auth). GIT_REPO_URL/GIT_REF override the defaults.
+        # 2. the operator code (public repo -> no auth). srcRepo/srcRef in the config override defaults.
         - name: code
           image: alpine/git:2.45.2
           command: ["/bin/sh", "-c"]
@@ -61,31 +62,38 @@ spec:
               REF="${SRC_REF:-main}"
               echo "cloning $REPO@$REF"
               rm -rf /code/* /code/.[!.]* 2>/dev/null || true
+              git config --global --add safe.directory /code
               git clone --depth 1 --branch "$REF" "$REPO" /code
           env:
             - { name: SRC_REPO, valueFrom: { configMapKeyRef: { name: ai-operator-config, key: srcRepo, optional: true } } }
             - { name: SRC_REF,  valueFrom: { configMapKeyRef: { name: ai-operator-config, key: srcRef,  optional: true } } }
+            - { name: HOME, value: /tmp }
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
-          volumeMounts: [{ name: code, mountPath: /code }]
+          volumeMounts:
+            - { name: code, mountPath: /code }
+            - { name: tmp, mountPath: /tmp }
 
-        # 3. python deps into a shared dir
+        # 3. python deps into a shared dir (pip --target needs no root; HOME=/tmp for its config)
         - name: deps
           image: python:3.12-slim
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
-              pip install --no-cache-dir --target=/deps -r /code/k8s/ai-operator/requirements.txt
+              export HOME=/tmp PIP_NO_CACHE_DIR=1 PIP_ROOT_USER_ACTION=ignore
+              pip install --quiet --target=/deps -r /code/k8s/ai-operator/requirements.txt
+              python -c "import sys; sys.path.insert(0,'/deps'); import kopf, kubernetes, httpx, numpy, yaml; print('deps ok')"
+          env:
+            - { name: HOME, value: /tmp }
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
-            runAsUser: 0
           volumeMounts:
             - { name: code, mountPath: /code }
             - { name: deps, mountPath: /deps }
+            - { name: tmp, mountPath: /tmp }
 
       containers:
         - name: operator

@@ -237,14 +237,34 @@ if [ -n "$OLLAMA_EXTERNAL_URL" ]; then
   say "Using external Ollama: $OLLAMA_EXTERNAL_URL"
   kubectl -n "$NS" scale deploy/ollama --replicas=0 >/dev/null 2>&1 || true
   kubectl -n "$NS" set env deploy/ai-operator OLLAMA_HOST="$OLLAMA_EXTERNAL_URL" >/dev/null
-  say "Checking reachability from inside the cluster..."
-  if kubectl -n "$NS" run ollamacheck --rm -i --restart=Never --image=curlimages/curl:8.10.1 -- \
-       curl -fsS -m8 "${OLLAMA_EXTERNAL_URL%/}/api/tags" >/dev/null 2>&1; then
+  say "Checking reachability from a pod in the cluster..."
+  kubectl -n "$NS" delete pod ollamacheck --ignore-not-found >/dev/null 2>&1 || true
+  cat <<YAML | kubectl apply -f - >/dev/null 2>&1
+apiVersion: v1
+kind: Pod
+metadata: { name: ollamacheck, namespace: $NS, labels: { app.kubernetes.io/name: ai-operator } }
+spec:
+  restartPolicy: Never
+  securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+  containers:
+    - name: c
+      image: curlimages/curl:8.10.1
+      args: ["--fail","--silent","--show-error","--max-time","8","${OLLAMA_EXTERNAL_URL%/}/api/tags"]
+      securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+YAML
+  kubectl -n "$NS" wait --for=condition=Ready pod/ollamacheck --timeout=25s >/dev/null 2>&1 || true
+  sleep 4
+  OLLA_PHASE="$(kubectl -n "$NS" get pod ollamacheck -o jsonpath='{.status.phase}' 2>/dev/null || echo Unknown)"
+  kubectl -n "$NS" delete pod ollamacheck --ignore-not-found >/dev/null 2>&1 || true
+  if [ "$OLLA_PHASE" = Succeeded ]; then
     ok "cluster can reach $OLLAMA_EXTERNAL_URL"
   else
-    warn "cluster CANNOT reach $OLLAMA_EXTERNAL_URL — the operator won't be able to think."
-    warn "  fix: Ollama must bind 0.0.0.0 AND the IP must be routable from cluster pods AND"
-    warn "       the host firewall must allow :11434. Then: kubectl -n $NS rollout restart deploy/ai-operator"
+    warn "cluster could NOT reach $OLLAMA_EXTERNAL_URL (check pod phase: $OLLA_PHASE)."
+    warn "  the operator will keep retrying. Fix on the Ollama host, then:"
+    warn "    1) bind it wide:  OLLAMA_HOST=0.0.0.0:11434 ollama serve   (macOS: launchctl setenv OLLAMA_HOST 0.0.0.0:11434 then restart Ollama)"
+    warn "    2) allow :11434 through the host firewall"
+    warn "    3) confirm cluster nodes can route to that IP"
+    warn "    then: kubectl -n $NS rollout restart deploy/ai-operator"
   fi
 else
   # in-cluster Ollama. For kind, repoint its storage at the host models mount.
@@ -286,15 +306,27 @@ fi
 # ============================================================================================
 # 7. wait + report
 # ============================================================================================
-say "Waiting for the operator (first start clones the repo + pip installs — ~2 min)"
-kubectl -n "$NS" rollout status deploy/ai-operator --timeout=300s || {
-  warn "not ready yet. Check:"
-  echo "    kubectl -n $NS get pods"
-  echo "    kubectl -n $NS logs deploy/ai-operator -c code   # git clone"
-  echo "    kubectl -n $NS logs deploy/ai-operator -c deps   # pip install"
-  echo "    kubectl -n $NS logs deploy/ai-operator            # the operator"
+say "Waiting for the operator (first start pulls 3 images + clones repo + pip installs — 3-6 min)"
+if ! kubectl -n "$NS" rollout status deploy/ai-operator --timeout=420s; then
+  POD="$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ai-operator -o name 2>/dev/null | head -1)"
+  warn "operator not ready yet. Current state:"
+  kubectl -n "$NS" get pods -l app.kubernetes.io/name=ai-operator 2>/dev/null | sed 's/^/    /'
+  if [ -n "$POD" ]; then
+    echo "    --- events ---"
+    kubectl -n "$NS" describe "$POD" 2>/dev/null | sed -n '/Events:/,$p' | sed 's/^/    /'
+  fi
+  cat <<TIP
+
+  It usually just needs more time (slow image pull / pip). Keep watching:
+    kubectl -n $NS get pods -w
+    kubectl -n $NS logs deploy/ai-operator -c tools -f    # kubectl+helm download
+    kubectl -n $NS logs deploy/ai-operator -c code  -f    # git clone
+    kubectl -n $NS logs deploy/ai-operator -c deps  -f    # pip install
+    kubectl -n $NS logs deploy/ai-operator          -f    # the operator itself
+  If a pod is Pending on resources, this cluster is short on capacity — free some, or use --kind.
+TIP
   exit 1
-}
+fi
 
 cat <<EOF
 
