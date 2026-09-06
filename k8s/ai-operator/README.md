@@ -27,16 +27,18 @@ cd k8s-ai-operator/k8s/ai-operator
 ./install.sh
 ```
 
-It does **not** create or modify a cluster — it deploys the operator into the one your kubeconfig
-points at. It:
-1. connects using your current context, shows the cluster identity (context, version, nodes), asks to confirm,
-2. preflights: your user can create Deployments + ClusterRoles, and a **default StorageClass exists**
-   (the operator's PVCs need one) — fails early with the fix if not,
-3. applies the CRDs + operator (no image build, no registry — the pod `git clone`s this repo and
-   `pip install`s at startup),
-4. starts Ollama in the cluster and pulls the small (≤8B) models the agents use,
-5. optionally installs Kyverno as an extra backstop (skippable — the operator is safe without it),
-6. waits for it to come up (~2 min first time).
+It does **not** create or modify a cluster — it deploys the operator into one you already have. It:
+1. **lists the kube contexts in your kubeconfig and asks which cluster** (or `--context NAME` /
+   `KUBE_CONTEXT` in `.env` to skip the prompt),
+2. shows that cluster's health (nodes Ready, API server, failing pods) — informative, not a gate;
+   a cluster in bad shape is exactly what this is for — then asks to confirm,
+4. preflights the real blockers: your user can create Deployments + ClusterRoles, and a **default
+   StorageClass exists** (the operator's PVCs need one) — fails early with the fix if not,
+5. applies the CRDs + operator with server-side apply (idempotent — safe to re-run); a partial
+   failure is reported, not fatal,
+6. starts Ollama in the cluster and pulls the small (≤8B) models the agents use,
+7. optionally installs Kyverno as an extra backstop (skippable — the operator is safe without it),
+8. waits for it to come up (~2 min first time).
 
 **No cluster yet, just trying it out?** `./install.sh --kind` spins up a throwaway local cluster
 (needs Docker running; reuses any models already in `~/.ollama`). This is the *only* mode that

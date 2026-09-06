@@ -2,11 +2,12 @@
 # ai-operator installer — deploys into your EXISTING Kubernetes cluster.
 # No image build, no registry, no host networking.
 #
-#   ./install.sh                 # install into the cluster your current kubeconfig points at
+#   ./install.sh                 # lists your kube contexts, asks which cluster, installs there
+#   ./install.sh --context NAME  # skip the prompt, use that context (or KUBE_CONTEXT in .env)
 #                                #   - laptop:  `kubectl get nodes` must already work
 #                                #   - control-plane node:  run as-is (uses admin.conf) or `sudo ./install.sh`
 #   ./install.sh --kind          # NO cluster yet? spin up a throwaway local one to try it
-#   ./install.sh --yes           # no prompts (CI)
+#   ./install.sh --yes           # no prompts (CI; uses current context unless --context given)
 #   ./install.sh --uninstall     # remove the operator (keeps memory/models PVCs unless --purge)
 #
 #   cp env.template .env         # OPTIONAL — every setting has a working default
@@ -16,12 +17,14 @@ set -Eeuo pipefail
 cd "$(dirname "$0")"
 
 # ---- args ---------------------------------------------------------------------------------------
-YES=0 KIND=0 UNINSTALL=0 PURGE=0
-for a in "$@"; do case "$a" in
+YES=0 KIND=0 UNINSTALL=0 PURGE=0 CTX_FLAG=""
+while [ $# -gt 0 ]; do case "$1" in
   -y|--yes) YES=1;; --kind) KIND=1;; --uninstall) UNINSTALL=1;; --purge) PURGE=1;;
-  -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
-  *) echo "unknown arg: $a" >&2; exit 2;;
-esac; done
+  --context) CTX_FLAG="${2:?--context needs a value}"; shift;;
+  --context=*) CTX_FLAG="${1#*=}";;
+  -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  *) echo "unknown arg: $1" >&2; exit 2;;
+esac; shift; done
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 ok()   { printf '    \033[32m✓\033[0m %s\n' "$*"; }
@@ -32,23 +35,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 OS="$(uname -s)"; ARCH="$(uname -m)"; case "$ARCH" in x86_64) ARCH=amd64;; arm64|aarch64) ARCH=arm64;; esac
 NS=ai-operator
 
-# ---- .env (parsed line by line — never sourced) -----------------------------------------------
-declare -A ENVV
-if [ -f .env ]; then
-  while IFS= read -r line || [ -n "$line" ]; do
-    line="${line%$'\r'}"
-    case "$line" in ''|\#*) continue;; esac
-    [ "${line#*=}" != "$line" ] || continue          # must contain '='
-    k="${line%%=*}"; v="${line#*=}"
-    k="$(printf '%s' "$k" | tr -d '[:space:]')"
-    case "$k" in *[!A-Za-z0-9_]*|'') continue;; esac  # valid identifier only
-    v="${v%%#*}"                                       # strip trailing comment
-    v="$(printf '%s' "$v" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
-    v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
-    ENVV[$k]="$v"
-  done < .env
-fi
-env_get() { printf '%s' "${ENVV[$1]:-${2:-}}"; }
+# ---- .env (read per-key — never sourced; portable to bash 3.2 / POSIX) -----------------------
+env_get() {
+  local key="$1" def="${2:-}" val=""
+  if [ -f .env ]; then
+    val="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" .env 2>/dev/null | head -1 \
+      | sed 's/^[^=]*=//; s/[[:space:]]*#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+  fi
+  [ -n "$val" ] && printf '%s' "$val" || printf '%s' "$def"
+}
 MODE="$(env_get MODE observe)"
 OLLAMA_EXTERNAL_URL="$(env_get OLLAMA_EXTERNAL_URL)"
 GIT_REPO_URL="$(env_get GIT_REPO_URL)"
@@ -109,70 +104,123 @@ if [ "$KIND" = 1 ]; then
 fi
 
 # ============================================================================================
-# 3. connect to the EXISTING cluster (from this machine's kubeconfig / current context)
+# 3. pick the cluster (existing kubeconfig contexts) + snapshot its health
 # ============================================================================================
-say "Connecting to your cluster"
-# On a control-plane node people often haven't set up a user kubeconfig — fall back to admin.conf.
-if ! kubectl config current-context >/dev/null 2>&1; then
-  if [ -r /etc/kubernetes/admin.conf ]; then
-    export KUBECONFIG=/etc/kubernetes/admin.conf
-    warn "no user kubeconfig — using /etc/kubernetes/admin.conf (you're on a control-plane node)"
-  elif sudo -n test -r /etc/kubernetes/admin.conf 2>/dev/null; then
-    TMPKC="$(mktemp)"; sudo cat /etc/kubernetes/admin.conf > "$TMPKC"; export KUBECONFIG="$TMPKC"
-    warn "no user kubeconfig — using a copy of /etc/kubernetes/admin.conf"
+KC="$(env_get KUBE_CONTEXT)"; [ -n "$CTX_FLAG" ] && KC="$CTX_FLAG"
+
+if [ "$KIND" = 1 ]; then
+  kubectl config use-context kind-ai-operator >/dev/null
+
+elif ! kubectl config current-context >/dev/null 2>&1 && [ -z "$KC" ]; then
+  # No kubeconfig at all — try the control-plane node's admin.conf, else explain.
+  if [ -r "$HOME/.kube/config" ]; then :; fi
+  if sudo -n test -r /etc/kubernetes/admin.conf 2>/dev/null || [ -r /etc/kubernetes/admin.conf ]; then
+    TMPKC="$(mktemp)"; { cat /etc/kubernetes/admin.conf 2>/dev/null || sudo cat /etc/kubernetes/admin.conf; } > "$TMPKC"
+    export KUBECONFIG="$TMPKC"
+    warn "no user kubeconfig — using /etc/kubernetes/admin.conf (control-plane node)"
   else
-    die "no kubeconfig found.
-    Run this from a machine that can already reach your cluster:
-      * your laptop:            \`kubectl get nodes\` must work first (set up ~/.kube/config)
-      * the control-plane node: \`export KUBECONFIG=/etc/kubernetes/admin.conf\` then re-run
-                                (or: sudo ./install.sh)
-    Or, just to try it out on a fresh local cluster:  ./install.sh --kind"
+    die "No kubeconfig found. Run this where you can already reach a cluster:
+      * laptop:            get \`kubectl get nodes\` working first (set KUBECONFIG or ~/.kube/config)
+      * control-plane node: re-run as \`sudo ./install.sh\`
+      * no cluster yet:     ./install.sh --kind"
+  fi
+
+else
+  # Enumerate contexts and let the user choose.
+  CTX_NAMES="$(kubectl config get-contexts -o name 2>/dev/null || true)"
+  CUR="$(kubectl config current-context 2>/dev/null || true)"
+  N=0; while IFS= read -r c; do [ -n "$c" ] && N=$((N+1)); done <<EOF
+$CTX_NAMES
+EOF
+
+  if [ -n "$KC" ]; then
+    printf '%s\n' "$CTX_NAMES" | grep -qx "$KC" || die "context '$KC' not in kubeconfig. Available:
+$(printf '%s\n' "$CTX_NAMES" | sed 's/^/      /')"
+    kubectl config use-context "$KC" >/dev/null
+  elif [ "$N" -le 1 ]; then
+    :   # single context — just use it
+  elif [ "$YES" = 1 ]; then
+    warn "multiple contexts; using current ($CUR). Pass --context <name> or KUBE_CONTEXT to choose."
+  else
+    say "Which cluster? (kube contexts in your kubeconfig)"
+    i=0
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      i=$((i+1)); eval "CTX_$i=\$c"
+      cl="$(kubectl config view -o "jsonpath={.contexts[?(@.name=='$c')].context.cluster}" 2>/dev/null)"
+      sv="$(kubectl config view -o "jsonpath={.clusters[?(@.name=='$cl')].cluster.server}" 2>/dev/null)"
+      mk=' '; [ "$c" = "$CUR" ] && mk='*'
+      printf '    %s %2d) %-40s %s\n' "$mk" "$i" "$c" "$sv"
+    done <<EOF
+$CTX_NAMES
+EOF
+    printf '    choose [1-%d, Enter = current "%s"]: ' "$i" "$CUR"
+    read -r pick
+    if [ -n "$pick" ]; then
+      case "$pick" in *[!0-9]*|'') die "not a number";; esac
+      [ "$pick" -ge 1 ] && [ "$pick" -le "$i" ] || die "out of range"
+      eval "CHOSEN=\$CTX_$pick"
+      kubectl config use-context "$CHOSEN" >/dev/null
+    fi
   fi
 fi
 
-CTX="$(kubectl config current-context)"
-kubectl version -o json >/dev/null 2>&1 || die "context '$CTX' is set but the cluster is unreachable (VPN down? server off? wrong context?)"
+CTX="$(kubectl config current-context 2>/dev/null || echo '?')"
+kubectl version -o json >/dev/null 2>&1 || die "context '$CTX' is set but the cluster is unreachable (VPN? server down? wrong context?)"
 
-SRV="$(kubectl version -o json 2>/dev/null | grep -o '\"gitVersion\": *\"[^\"]*\"' | tail -1 | cut -d'\"' -f4)"
-NODES="$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')"
-NOTREADY="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"' | wc -l | tr -d ' ')"
-say "Target cluster"
-printf '    context : %s\n    server  : %s\n    nodes   : %s (%s not Ready)\n' "$CTX" "${SRV:-?}" "$NODES" "$NOTREADY"
-case "$CTX" in *prod*|*production*) warn "this context name contains 'prod' — make sure this is intended";; esac
-[ "$KIND" = 1 ] || ask "install ai-operator into THIS existing cluster?" || die "aborted"
+# ---- health snapshot — informative, NOT a gate. A cluster in bad shape is the whole point. ---
+SRV="$(kubectl version -o json 2>/dev/null | grep -o '"gitVersion": *"[^"]*"' | tail -1 | cut -d'"' -f4)"
+say "Target: $CTX   (server ${SRV:-?})"
+NT="$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+NR="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2=="Ready"' | wc -l | tr -d ' ')"
+[ "$NR" = "$NT" ] && [ "$NT" != 0 ] && ok "nodes: $NR/$NT Ready" || warn "nodes: $NR/$NT Ready"
+kubectl get --raw='/readyz' >/dev/null 2>&1 && ok "API server: healthy" \
+  || warn "API server /readyz failing — installing anyway (this operator is meant to help fix that)"
+BADP="$(kubectl get pods -A --no-headers 2>/dev/null | awk '$4!="Running"&&$4!="Completed"&&$4!="Succeeded"' | wc -l | tr -d ' ')"
+[ "$BADP" = 0 ] && ok "no failing pods cluster-wide" \
+  || warn "$BADP pod(s) not Running cluster-wide — the operator will open findings for these"
+case "$CTX" in *prod*|*production*) warn "context name contains 'prod' — confirm this is intended";; esac
+[ "$KIND" = 1 ] || ask "install ai-operator into '$CTX'?" || die "aborted"
 
-# ---- existing-cluster preflight (fail early, not after a half-install) -----------------------
+# ---- hard gates (these genuinely block a working install) -----------------------------------
 say "Preflight"
-kubectl auth can-i create deployments -n default >/dev/null 2>&1 \
+kubectl auth can-i create deployments -A >/dev/null 2>&1 \
   && kubectl auth can-i create clusterroles >/dev/null 2>&1 \
-  || die "your kubeconfig user can't create Deployments + ClusterRoles here — use an admin context"
+  || die "this kubeconfig user can't create Deployments + ClusterRoles — use an admin context (--context)"
 ok "permissions"
 
 if [ -z "$OLLAMA_EXTERNAL_URL" ]; then
-  DEFSC="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
+  DEFSC="$(kubectl get sc -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)"
   if [ -z "$DEFSC" ]; then
-    warn "no DEFAULT StorageClass — the memory + Ollama-models PVCs will hang as Pending."
-    warn "  fix one of: mark a StorageClass default, or set OLLAMA_EXTERNAL_URL + a manual PV,"
-    warn "  or install a provisioner (e.g. local-path-provisioner)."
-    ask "continue anyway?" || die "aborted — no storage"
+    warn "no DEFAULT StorageClass — the operator's PVCs (memory + models) would hang Pending."
+    warn "  options: (a) mark a StorageClass default:"
+    warn "             kubectl annotate sc <name> storageclass.kubernetes.io/is-default-class=true"
+    warn "           (b) set OLLAMA_EXTERNAL_URL in .env (skips the models PVC; memory still needs a bit)"
+    warn "           (c) install a provisioner: helm/kubectl for local-path-provisioner"
+    ask "continue anyway?" || die "aborted — sort out storage first"
   else
     ok "default StorageClass: $DEFSC"
   fi
-  # Ollama wants ~3Gi request; warn if the biggest node can't obviously fit it
-  if kubectl top nodes >/dev/null 2>&1; then
-    kubectl top nodes | sed 's/^/    /'
-  fi
 else
-  ok "external Ollama configured — no in-cluster model storage needed"
+  ok "external Ollama — no in-cluster model storage needed"
 fi
 
 # ============================================================================================
-# 4. CRDs + core manifests  (no build, no push)
+# 4. CRDs + core manifests  (server-side apply -> idempotent re-runs; failures reported, not fatal)
 # ============================================================================================
+apply() {  # $@ = kubectl apply args; on failure show what broke and ask
+  if kubectl apply --server-side --force-conflicts "$@" 2>/tmp/aiop-apply.err; then return 0; fi
+  warn "some resources did not apply:"
+  sed 's/^/      /' /tmp/aiop-apply.err
+  ask "continue with the rest?" || die "aborted"
+}
 say "Applying CRDs"
-kubectl apply -f crds/
+apply -f crds/
+kubectl wait --for=condition=established --timeout=60s \
+  crd/findings.ai-operator.io crd/remediations.ai-operator.io >/dev/null 2>&1 || \
+  warn "CRDs not established yet — the operator will retry its watches"
 say "Applying operator (namespace, RBAC, Ollama, config, deployment)"
-kubectl apply -k .
+apply -k .
 
 # seed config + git secret from .env, then restart so initContainers pick up any fork/branch
 kubectl -n "$NS" patch cm ai-operator-config --type merge \
