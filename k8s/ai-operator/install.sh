@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# ai-operator installer. No image build, no registry, no host networking.
+# ai-operator installer — deploys into your EXISTING Kubernetes cluster.
+# No image build, no registry, no host networking.
 #
-#   cp env.template .env && "${EDITOR:-vi}" .env      # optional — defaults work
-#   ./install.sh                 # deploy into your current kubectl context
-#   ./install.sh --kind          # create a throwaway local kind cluster and deploy into it
+#   ./install.sh                 # install into the cluster your current kubeconfig points at
+#                                #   - laptop:  `kubectl get nodes` must already work
+#                                #   - control-plane node:  run as-is (uses admin.conf) or `sudo ./install.sh`
+#   ./install.sh --kind          # NO cluster yet? spin up a throwaway local one to try it
 #   ./install.sh --yes           # no prompts (CI)
-#   ./install.sh --uninstall     # remove the operator (keeps memory unless --purge)
+#   ./install.sh --uninstall     # remove the operator (keeps memory/models PVCs unless --purge)
 #
-# Requires on the host: kubectl. (helm only if you let it install Kyverno; kind only for --kind;
-# docker only for --kind.) Missing ones are offered for install.
+#   cp env.template .env         # OPTIONAL — every setting has a working default
+#
+# Host needs: kubectl. (helm only if you opt into Kyverno; kind + docker only for --kind.)
 set -Eeuo pipefail
 cd "$(dirname "$0")"
 
@@ -16,7 +19,7 @@ cd "$(dirname "$0")"
 YES=0 KIND=0 UNINSTALL=0 PURGE=0
 for a in "$@"; do case "$a" in
   -y|--yes) YES=1;; --kind) KIND=1;; --uninstall) UNINSTALL=1;; --purge) PURGE=1;;
-  -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+  -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
   *) echo "unknown arg: $a" >&2; exit 2;;
 esac; done
 
@@ -90,33 +93,77 @@ fi
 # ============================================================================================
 say "Host tools"
 need kubectl
-[ "$KIND" = 1 ] && { need kind; have docker || die "--kind needs Docker running (Docker Desktop / OrbStack / Colima)"; docker info >/dev/null 2>&1 || die "Docker daemon not reachable — start Docker and re-run"; }
+[ "$KIND" = 1 ] && { need kind; have docker || die "--kind needs Docker (Docker Desktop / OrbStack / Colima)"; docker info >/dev/null 2>&1 || die "Docker daemon not reachable — start Docker and re-run"; }
 
 # ============================================================================================
-# 2. kind cluster (optional)
+# 2. --kind ONLY: create a throwaway test cluster. Default path installs into your EXISTING cluster.
 # ============================================================================================
 if [ "$KIND" = 1 ]; then
   if kind get clusters 2>/dev/null | grep -qx ai-operator; then
     ok "kind cluster 'ai-operator' already exists"
   else
-    say "Creating kind cluster 'ai-operator' (reuses \$HOME/.ollama models)"
+    say "Creating throwaway kind cluster 'ai-operator' (reuses \$HOME/.ollama models)"
     sed "s#HOST_HOME#${HOME}#" deploy/kind-cluster.yaml | kind create cluster --config -
   fi
   kubectl config use-context kind-ai-operator >/dev/null
 fi
 
 # ============================================================================================
-# 3. confirm target
+# 3. connect to the EXISTING cluster (from this machine's kubeconfig / current context)
 # ============================================================================================
-CTX="$(kubectl config current-context 2>/dev/null)" || die "no kubectl context — is your cluster up?"
-kubectl version -o json >/dev/null 2>&1 || die "cannot reach the cluster for context '$CTX'"
-say "Target: $CTX"
-case "$CTX" in *prod*|*production*) warn "context looks like PRODUCTION";; esac
-ask "install ai-operator here?" || die "aborted"
+say "Connecting to your cluster"
+# On a control-plane node people often haven't set up a user kubeconfig — fall back to admin.conf.
+if ! kubectl config current-context >/dev/null 2>&1; then
+  if [ -r /etc/kubernetes/admin.conf ]; then
+    export KUBECONFIG=/etc/kubernetes/admin.conf
+    warn "no user kubeconfig — using /etc/kubernetes/admin.conf (you're on a control-plane node)"
+  elif sudo -n test -r /etc/kubernetes/admin.conf 2>/dev/null; then
+    TMPKC="$(mktemp)"; sudo cat /etc/kubernetes/admin.conf > "$TMPKC"; export KUBECONFIG="$TMPKC"
+    warn "no user kubeconfig — using a copy of /etc/kubernetes/admin.conf"
+  else
+    die "no kubeconfig found.
+    Run this from a machine that can already reach your cluster:
+      * your laptop:            \`kubectl get nodes\` must work first (set up ~/.kube/config)
+      * the control-plane node: \`export KUBECONFIG=/etc/kubernetes/admin.conf\` then re-run
+                                (or: sudo ./install.sh)
+    Or, just to try it out on a fresh local cluster:  ./install.sh --kind"
+  fi
+fi
 
-# capacity hint (not fatal)
-if kubectl top nodes >/dev/null 2>&1; then
-  kubectl top nodes | sed 's/^/    /'
+CTX="$(kubectl config current-context)"
+kubectl version -o json >/dev/null 2>&1 || die "context '$CTX' is set but the cluster is unreachable (VPN down? server off? wrong context?)"
+
+SRV="$(kubectl version -o json 2>/dev/null | grep -o '\"gitVersion\": *\"[^\"]*\"' | tail -1 | cut -d'\"' -f4)"
+NODES="$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+NOTREADY="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2!="Ready"' | wc -l | tr -d ' ')"
+say "Target cluster"
+printf '    context : %s\n    server  : %s\n    nodes   : %s (%s not Ready)\n' "$CTX" "${SRV:-?}" "$NODES" "$NOTREADY"
+case "$CTX" in *prod*|*production*) warn "this context name contains 'prod' — make sure this is intended";; esac
+[ "$KIND" = 1 ] || ask "install ai-operator into THIS existing cluster?" || die "aborted"
+
+# ---- existing-cluster preflight (fail early, not after a half-install) -----------------------
+say "Preflight"
+kubectl auth can-i create deployments -n default >/dev/null 2>&1 \
+  && kubectl auth can-i create clusterroles >/dev/null 2>&1 \
+  || die "your kubeconfig user can't create Deployments + ClusterRoles here — use an admin context"
+ok "permissions"
+
+if [ -z "$OLLAMA_EXTERNAL_URL" ]; then
+  DEFSC="$(kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
+  if [ -z "$DEFSC" ]; then
+    warn "no DEFAULT StorageClass — the memory + Ollama-models PVCs will hang as Pending."
+    warn "  fix one of: mark a StorageClass default, or set OLLAMA_EXTERNAL_URL + a manual PV,"
+    warn "  or install a provisioner (e.g. local-path-provisioner)."
+    ask "continue anyway?" || die "aborted — no storage"
+  else
+    ok "default StorageClass: $DEFSC"
+  fi
+  # Ollama wants ~3Gi request; warn if the biggest node can't obviously fit it
+  if kubectl top nodes >/dev/null 2>&1; then
+    kubectl top nodes | sed 's/^/    /'
+  fi
+else
+  ok "external Ollama configured — no in-cluster model storage needed"
 fi
 
 # ============================================================================================

@@ -7,9 +7,19 @@ not a promise). Findings and fixes are Kubernetes objects you can see and approv
 
 ---
 
-## Quick start
+## Quick start — installs into your **existing** cluster
 
-**You need:** a Kubernetes cluster + `kubectl`. That's it. (Ollama runs *in* the cluster.)
+**Prerequisite:** you can already reach your cluster. Verify:
+
+```bash
+kubectl get nodes        # must list your nodes
+```
+
+- **From your laptop:** that means `~/.kube/config` is set up for the cluster.
+- **From the control-plane node:** if `kubectl` isn't configured for your user, the installer
+  falls back to `/etc/kubernetes/admin.conf` automatically (or run `sudo ./install.sh`).
+
+Then:
 
 ```bash
 git clone https://github.com/vidhya101/k8s-ai-operator.git
@@ -17,17 +27,20 @@ cd k8s-ai-operator/k8s/ai-operator
 ./install.sh
 ```
 
-**No cluster handy?** `./install.sh --kind` creates a throwaway local one (needs Docker running;
-reuses any models already in `~/.ollama`).
-
-That's the whole install. It:
-1. checks/offers to install `kubectl` (and `kind` for `--kind`),
-2. shows your target context and asks to confirm,
+It does **not** create or modify a cluster — it deploys the operator into the one your kubeconfig
+points at. It:
+1. connects using your current context, shows the cluster identity (context, version, nodes), asks to confirm,
+2. preflights: your user can create Deployments + ClusterRoles, and a **default StorageClass exists**
+   (the operator's PVCs need one) — fails early with the fix if not,
 3. applies the CRDs + operator (no image build, no registry — the pod `git clone`s this repo and
    `pip install`s at startup),
 4. starts Ollama in the cluster and pulls the small (≤8B) models the agents use,
 5. optionally installs Kyverno as an extra backstop (skippable — the operator is safe without it),
 6. waits for it to come up (~2 min first time).
+
+**No cluster yet, just trying it out?** `./install.sh --kind` spins up a throwaway local cluster
+(needs Docker running; reuses any models already in `~/.ollama`). This is the *only* mode that
+creates anything.
 
 ### Optional config — `.env`
 
