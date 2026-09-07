@@ -16,10 +16,8 @@ resources:
   - deploy/rbac.yaml
   - deploy/ollama.yaml
   - deploy/networkpolicy.yaml
-  - deploy/pvc.yaml
   - deploy/config.yaml
   - deploy/deployment.yaml
-  - deploy/memory-backup-cronjob.yaml
 
 labels:
   - pairs:

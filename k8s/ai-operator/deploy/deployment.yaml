@@ -105,6 +105,8 @@ spec:
             - { name: PATH, value: "/tools:/usr/local/bin:/usr/bin:/bin" }
             - { name: PYTHONPATH, value: "/deps:/code/k8s/ai-operator/src" }
             - { name: PYTHONUNBUFFERED, value: "1" }
+            - { name: USER, value: "ai-operator" }        # kopf calls getpass.getuser()
+            - { name: LOGNAME, value: "ai-operator" }
             - { name: HOME, value: "/tmp" }
             - { name: OLLAMA_HOST, value: "http://ollama.ai-operator.svc.cluster.local:11434" }
             - { name: MEMORY_DB, value: "/memory/agent.db" }
@@ -141,7 +143,10 @@ spec:
             - { name: workspace, mountPath: /workspace }
             - { name: tmp, mountPath: /tmp }
       volumes:
-        - { name: memory, persistentVolumeClaim: { claimName: ai-operator-memory } }
+        # Ephemeral by default so the operator installs on ANY cluster (a struggling local-path
+        # provisioner can't block it). Learnings reset on pod restart. For persistence, replace
+        # this with:  persistentVolumeClaim: { claimName: ai-operator-memory }  (+ keep pvc.yaml).
+        - { name: memory, emptyDir: { sizeLimit: 1Gi } }
         - { name: code, emptyDir: { sizeLimit: 200Mi } }
         - { name: deps, emptyDir: { sizeLimit: 512Mi } }
         - { name: tools, emptyDir: { sizeLimit: 128Mi } }

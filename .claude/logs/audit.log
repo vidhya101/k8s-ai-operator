@@ -140,3 +140,10 @@ the usual root cause (apiserver/etcd too slow -> lost leader lease -> crashloop)
 and give the on-node diagnosis + the leader-elect-timeout band-aid.
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" && git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
+2026-09-07T05:51:08Z	git add -A && git commit --quiet -m "fix(ai-operator): rename src/operator.py -> src/aiop.py (shadowed stdlib 'operator')
+
+The operator's src dir is on PYTHONPATH, so 'operator.py' shadowed Python's
+built-in 'operator' module -> ImportError: cannot import name 'or_' from
+partially initialized module 'operator' (circular import) on every start.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" && git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
