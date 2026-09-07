@@ -33,4 +33,4 @@ USER 65532
 ENV HOME=/tmp PYTHONUNBUFFERED=1 PYTHONPATH=/app/src
 WORKDIR /app
 EXPOSE 8080
-ENTRYPOINT ["kopf", "run", "--standalone", "--liveness=http://0.0.0.0:8080/healthz", "/app/src/operator.py"]
+ENTRYPOINT ["kopf", "run", "--standalone", "--liveness=http://0.0.0.0:8080/healthz", "/app/src/aiop.py"]

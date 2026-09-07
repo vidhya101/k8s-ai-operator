@@ -1,4 +1,4 @@
-# Agent registry. The operator (src/operator.py + src/agents.py) reads this at startup.
+# Agent registry. The operator (src/aiop.py + src/agents.py) reads this at startup.
 # `model` is a key into the ai-operator-config ConfigMap (so you retune models without a rebuild).
 # `promptFile` is mounted at /app/config/prompts/.
 #

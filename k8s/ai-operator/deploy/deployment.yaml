@@ -100,7 +100,7 @@ spec:
           image: python:3.12-slim
           command: ["python", "-m", "kopf", "run", "--standalone",
                     "--liveness=http://0.0.0.0:8080/healthz",
-                    "/code/k8s/ai-operator/src/operator.py"]
+                    "/code/k8s/ai-operator/src/aiop.py"]
           env:
             - { name: PATH, value: "/tools:/usr/local/bin:/usr/bin:/bin" }
             - { name: PYTHONPATH, value: "/deps:/code/k8s/ai-operator/src" }

@@ -6,7 +6,10 @@
       "Bash(echo \"fmt exit: $?\")",
       "Bash(echo \"kustomize exit $?\")",
       "Bash(python3 -c ' *)",
-      "mcp__memory__add_observations"
+      "mcp__memory__add_observations",
+      "Bash(git branch *)",
+      "Bash(bash -n install.sh)",
+      "Bash(python3 -c \"import yaml; list\\(yaml.safe_load_all\\(open\\('deploy/deployment.yaml'\\)\\)\\); print\\('deployment.yaml OK'\\)\")"
     ],
     "defaultMode": "default"
   }

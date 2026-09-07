@@ -44,3 +44,99 @@ echo ok
 }
 EOF
 echo written
+2026-09-06T06:13:38Z	cd /Users/vidhyashankergoel/Desktop/Devsecops
+git add k8s/ai-operator/
+git commit --quiet -m "$(cat <<'EOF'
+fix(ai-operator): install.sh model pull, distro detection, and non-kind image path
+
+- pull-models.sh: extract model names with awk -F'"' instead of a sed that
+  broke on tags like "llama3:8b" (grabbed "8b") and silently no-op'd on macOS
+  (BSD sed has no \s) — the latter produced a whole-line model name and a 400
+  from /api/pull
+- detect-distro.sh: single `kubectl get nodes -o json` call (a slow/remote
+  cluster no longer flips the result to "unknown"); detect kubeadm via the
+  kubeadm.alpha.kubernetes.io node annotation; add rke2
+- install.sh: hard-stop with a GHCR recipe when the cluster can't side-load and
+  IMAGE_REPO is empty; build for the NODES' architecture (buildx --platform),
+  IMAGE_PLATFORM override for cross-arch; create+wire an imagePullSecret from
+  GIT_TOKEN for private GHCR/Docker Hub
+- env.template: clearer OLLAMA_IP guidance (as seen from nodes), IMAGE_PLATFORM
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+EOF
+)"
+git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
+2026-09-06T07:00:47Z	cd /Users/vidhyashankergoel/Desktop/Devsecops/k8s/ai-operator
+kustomize build . | kubectl apply --dry-run=client -f - 2>&1 | tail -20
+echo "--- crds ---"
+kubectl apply --dry-run=client -f crds/ 2>&1
+echo "--- kyverno guardrails (client dry-run; CRD unknown offline is expected) ---"
+kubectl apply --dry-run=client -f deploy/kyverno-guardrails.yaml 2>&1 | tail -3
+2026-09-06T07:02:27Z	cd /Users/vidhyashankergoel/Desktop/Devsecops && git add k8s/ai-operator/ && git commit --quiet -F /private/tmp/claude-501/-Users-vidhyashankergoel-Desktop-Devsecops/b426284e-33dd-4b17-a55a-33667c854738/scratchpad/msg.txt && git push -q origin main && echo "pushed $(git rev-parse --short HEAD)" && git show --stat HEAD | tail -25
+2026-09-06T07:10:51Z	kustomize build . >/dev/null && echo "kustomize OK" && cd /Users/vidhyashankergoel/Desktop/Devsecops && git add k8s/ai-operator/ && git commit --quiet -m "feat(ai-operator): default = install into your EXISTING cluster, not create one
+
+- install.sh connects via the current kubeconfig context; on a control-plane
+  node with no user kubeconfig it falls back to /etc/kubernetes/admin.conf
+  (or sudo). Clear error listing the two supported setups if neither works.
+- shows cluster identity (context/version/nodes) and confirms before applying
+- preflight fails early: can-i create Deployments+ClusterRoles, and a default
+  StorageClass must exist (the PVCs need one) — with the fix in the message
+- --kind is now clearly the only mode that creates a cluster (for trying it out)
+- README quick start leads with the existing-cluster flow
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" && git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
+2026-09-06T07:16:14Z	cd /Users/vidhyashankergoel/Desktop/Devsecops/k8s/ai-operator && kustomize build . >/dev/null && echo "kustomize OK" && bash -n install.sh && bash -n scripts/*.sh && echo "bash OK" && cd /Users/vidhyashankergoel/Desktop/Devsecops && git add k8s/ai-operator/ && git commit --quiet -F - <<'EOF'
+feat(ai-operator): interactive cluster picker + resilient install for bad-shape clusters
+
+- install.sh lists kube contexts (name + server, current marked) and asks which
+  to use; --context NAME / KUBE_CONTEXT skip it; single context auto-selected
+- .env parsing rewritten without bash-4 associative arrays (works on macOS
+  /bin/bash 3.2), per-key grep+sed, strips comments/space/quotes
+- health snapshot (nodes Ready, /readyz, failing pods) is shown but does NOT
+  block — installing onto an unhealthy cluster is the point
+- hard gates only for genuine blockers: RBAC to create Deployments+ClusterRoles,
+  a default StorageClass (with the 3 fixes in the message)
+- server-side apply --force-conflicts => clean re-runs; partial apply failure is
+  reported and prompts to continue instead of aborting the whole install
+- wait for CRDs established before the operator starts its watches
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+EOF
+git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
+2026-09-06T08:29:33Z	cd /Users/vidhyashankergoel/Desktop/Devsecops/k8s/ai-operator
+bash -n install.sh && echo "bash OK"
+python3 -c "import yaml; list(yaml.safe_load_all(open('deploy/deployment.yaml'))); print('deployment.yaml OK')"
+kustomize build . >/dev/null && echo "kustomize OK"
+kustomize build . | kubectl apply --dry-run=client -f - 2>&1 | grep -iE 'error|warn' || echo "no client errors"
+grep -c 'runAsUser: 0' deploy/deployment.yaml || true
+2026-09-06T08:30:00Z	cd /Users/vidhyashankergoel/Desktop/Devsecops && git add k8s/ai-operator/ && git commit --quiet -F - <<'EOF'
+fix(ai-operator): init containers are PodSecurity-restricted compliant
+
+The operator pod was rejected by PSA "restricted" (namespace enforce) because
+the `tools` and `deps` initContainers ran as runAsUser=0 -> "0 replicas updated".
+
+- tools: use busybox wget/tar from base alpine instead of `apk add` -> no root
+- deps:  pip install --target needs no root; HOME=/tmp, PIP_NO_CACHE_DIR
+- code:  git config safe.directory, HOME=/tmp
+- all init containers now inherit the pod's runAsUser 65532 / runAsNonRoot /
+  drop-ALL / seccomp; readOnlyRootFilesystem dropped on init only (not required
+  by restricted; pip/git/wget need a writable /)
+- deps container verifies imports (kopf, kubernetes, httpx, numpy, yaml)
+
+Also:
+- external-Ollama reachability check now runs a properly-secured Pod (the old
+  `kubectl run` was itself PSA-rejected in the restricted namespace) and prints
+  a concrete bind/firewall/routing checklist on failure
+- rollout wait 300s -> 420s + dumps pod state & events on timeout
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+EOF
+git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
+2026-09-07T05:14:43Z	git add k8s/ai-operator/install.sh && git commit --quiet -m "feat(ai-operator): detect a dead kube-scheduler in preflight
+
+If kube-scheduler / kube-controller-manager aren't Running, nothing new will
+ever be placed and the install hangs forever on Pending. Check explicitly, name
+the usual root cause (apiserver/etcd too slow -> lost leader lease -> crashloop),
+and give the on-node diagnosis + the leader-elect-timeout band-aid.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>" && git push -q origin main && echo "pushed $(git rev-parse --short HEAD)"
