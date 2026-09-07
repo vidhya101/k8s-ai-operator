@@ -176,6 +176,23 @@ NR="$(kubectl get nodes --no-headers 2>/dev/null | awk '$2=="Ready"' | wc -l | t
 [ "$NR" = "$NT" ] && [ "$NT" != 0 ] && ok "nodes: $NR/$NT Ready" || warn "nodes: $NR/$NT Ready"
 kubectl get --raw='/readyz' >/dev/null 2>&1 && ok "API server: healthy" \
   || warn "API server /readyz failing — installing anyway (this operator is meant to help fix that)"
+
+# The scheduler + controller-manager MUST be up or nothing new will ever be placed — check explicitly.
+SCHED="$(kubectl -n kube-system get pods -l component=kube-scheduler --no-headers 2>/dev/null | awk '{print $3}' | sort -u | tr '\n' ',' )"
+CM="$(kubectl -n kube-system get pods -l component=kube-controller-manager --no-headers 2>/dev/null | awk '{print $3}' | sort -u | tr '\n' ',')"
+if printf '%s' "$SCHED" | grep -qv 'Running' && [ -n "$SCHED" ]; then
+  warn "kube-scheduler is $SCHED — NOTHING will schedule until it's fixed."
+  warn "  usual cause on a small/loaded cluster: apiserver/etcd too slow -> scheduler loses its"
+  warn "  leader lease and crashloops. On the control-plane node:"
+  warn "    sudo crictl ps -a | grep -E 'etcd|apiserver|scheduler'"
+  warn "    sudo crictl logs \$(sudo crictl ps -a --name kube-scheduler -q | head -1) 2>&1 | tail -30"
+  warn "    free -h ; df -h /var/lib/etcd    # OOM? disk full/slow?"
+  warn "  band-aid: add to /etc/kubernetes/manifests/kube-scheduler.yaml (and kube-controller-manager.yaml):"
+  warn "    --leader-elect-lease-duration=30s --leader-elect-renew-deadline=20s --leader-elect-retry-period=4s"
+  ask "the operator install WILL hang until this is fixed. Continue anyway?" || die "fix the scheduler first"
+elif [ -n "$SCHED" ]; then ok "kube-scheduler: Running"; fi
+[ -n "$CM" ] && printf '%s' "$CM" | grep -qv 'Running' && warn "kube-controller-manager is $CM (same root cause as a bad scheduler)" || true
+
 BADP="$(kubectl get pods -A --no-headers 2>/dev/null | awk '$4!="Running"&&$4!="Completed"&&$4!="Succeeded"' | wc -l | tr -d ' ')"
 [ "$BADP" = 0 ] && ok "no failing pods cluster-wide" \
   || warn "$BADP pod(s) not Running cluster-wide — the operator will open findings for these"
